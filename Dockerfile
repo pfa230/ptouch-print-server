@@ -3,7 +3,8 @@ FROM debian:bookworm
 # Build deps for ptouch-print, PAPPL (from source), and the spike stubs, plus
 # cups-ipp-utils (ipptool/ippeveprinter), usbutils (lsusb), and Pillow (fixtures).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config git ca-certificates autoconf \
+      build-essential cmake pkg-config git ca-certificates \
+      autoconf automake libtool gettext autopoint \
       libusb-1.0-0-dev libgd-dev libpng-dev libjpeg-dev zlib1g-dev \
       libcups2-dev libcupsimage2-dev cups-ipp-utils usbutils \
       libssl-dev libavahi-client-dev \
