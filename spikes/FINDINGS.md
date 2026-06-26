@@ -101,3 +101,21 @@ to a host.** (An earlier ~2h idle did find it off, so a much longer idle-off may
 priority.) NOTE: my first "ping" test falsely reported GONE because `ptouch-print --info` prints to
 stderr and the script did `2>/dev/null`. **Decision: no keep-alive, no power-button hardware, no
 embedded-Pi-for-power needed for the tethered architecture.**
+
+## Probe H (PAPPL built-in usb:// viability) — ANSWERED: NO. + Probe C resolved
+
+USB descriptors: Brother / PT-2730 / serial A4Z350200 (usb://Brother/PT-2730?serial=A4Z350200).
+
+- PAPPL's `stub devices` (USB enumeration / IEEE-1284 device-ID probe) **HANGS** on the PT-2730.
+  The hang is in a libusb transfer with **timeout 0**, so it is **not killable** by `timeout`
+  SIGTERM (and even SIGKILL didn't return within the window). The hung process **holds the USB
+  interface claimed**, which **wedges the device for other clients** — `ptouch-print --info`
+  was blocked until the hung PID was killed, then recovered immediately.
+- **Per Codex**, opening a `usb://` URI runs the same device-ID probe before URI construction, so a
+  manually-built `usb://Brother/PT-2730?serial=…` does NOT bypass the hang.
+- **CONCLUSION (drives M2): PAPPL's built-in `usb://` device is UNUSABLE for the PT-2730.** The real
+  driver must drive USB via **raw libusb with bounded timeouts** — either a **custom PAPPL device
+  scheme** (`papplDeviceAddScheme` providing open/read/write/close) or USB I/O outside PAPPL's
+  device layer. `ptouch-print`'s libusb path works (oracle), so this is proven viable.
+- **Probe C resolved by the same finding:** `papplDeviceRead` is unbounded/hangs; the bounded
+  status read must use raw libusb with a real timeout in the custom device path.
