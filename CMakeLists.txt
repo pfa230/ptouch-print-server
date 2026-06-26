@@ -9,6 +9,7 @@ add_compile_options(-Wall -Wextra)
 add_library(ptcore STATIC
   src/tables.c
   src/protocol.c
+  src/raster.c
 )
 target_include_directories(ptcore PUBLIC src)
 
