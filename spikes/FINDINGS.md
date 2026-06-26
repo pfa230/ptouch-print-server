@@ -34,3 +34,40 @@ Running log; each probe appends. Host: Unraid `dockerhost` (<host-ip>), PT-2730 
 ## Loaded tape
 
 - **12 mm (76 px imageable)** at time of spike. Fixtures sized to this.
+
+## Probe B (raster reality) — ANSWERED via in-process socket-device stub
+
+Setup notes (hard-won): PAPPL USB auto-discovery hangs on the PT-2730, `file://` device
+unsupported, avahi-daemon required, and the `add` CLI rejects names oddly — so the stub creates
+the printer **in-process** (`papplPrinterCreate`, name `spike`, `socket://127.0.0.1:9100` → a
+python sink). Required driver_data to avoid rejection/segfault: `make_and_model`, non-zero `ppm`,
+and the `source[]`/`type[]` arrays (not just `num_source`/`num_type`, else `validate_ready`
+strcmp's NULL → SIGSEGV).
+
+Findings (12mm/76px tape loaded; force_raster_type=BLACK_1):
+- **Orientation: rwriteline = one CROSS-TAPE scanline.** `rstartpage` reports `cupsWidth=85`
+  (≈12mm across at 180dpi), `cupsHeight=708` (=100mm media length), `bpp=1 bpc=1 bpl=11`. So each
+  `rwriteline(y,line)` is one Brother raster line; `y` advances along the tape length. **No
+  transpose / full-page buffer needed** — stream a raster command per scanline.
+- **Bit depth: PAPPL dithers to 1-bit when BLACK_1 is forced.** Gradient fixture → `0f 0f 0f…`
+  dither. Driver can consume the delivered 1-bit lines directly (the core's own 127/128 threshold
+  is NOT needed if we force BLACK_1).
+- **Scaling is media-driven (the spec's worry, confirmed).** A 300×64 source was scaled to fill
+  the 85×708 media; `print-scaling-default=auto`. The real driver MUST set media to the intended
+  label size (and/or `print-scaling`) or PAPPL rescales. The 100mm length was just my media_col
+  `size_length=10000`.
+- **Width reconciliation needed:** PAPPL computes 85px for 12mm media (12mm@180dpi), but the head
+  images 76px. The real driver must set the media width to the printable 76px (or model margins).
+- Get-Printer-Attributes confirms: `document-format-supported` incl. image/png, `finishings-
+  supported = none,trim`, `pwg-raster-document-type-supported = black_1,black_8`, `media-ready =
+  om_12mm-tape…`, `printer-state = idle`.
+
+## Probe C (status) — partial
+- `status_cb` runs and does `papplPrinterOpenDevice` + write `1b6953` + `papplDeviceRead`. Over the
+  socket sink it returns `-1` (no status source). **`papplDeviceRead` is unbounded** (confirmed —
+  it's why `devices`/status hang on USB). Real PT-2730 status + a bounded-read strategy still need
+  the USB device (deferred; `keep_device_open` is not a 1.4.11 field).
+
+## Probe F (job model) — partial
+- `options->copies`, `options->finishings`, `options->num_pages` are visible in the raster
+  callbacks (logged per job). Multi-document / `last-document` test via Create-Job still pending.
