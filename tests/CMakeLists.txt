@@ -9,3 +9,7 @@ add_test(NAME protocol COMMAND test_protocol)
 add_executable(test_raster test_raster.c)
 target_link_libraries(test_raster ptcore)
 add_test(NAME raster COMMAND test_raster)
+
+add_executable(test_status test_status.c)
+target_link_libraries(test_status ptcore)
+add_test(NAME status COMMAND test_status)
