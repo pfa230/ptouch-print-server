@@ -8,6 +8,7 @@ add_compile_options(-Wall -Wextra)
 # Pure, hardware-free core (libc only). The PAPPL + raw-libusb adapter (M2) links this.
 add_library(ptcore STATIC
   src/tables.c
+  src/protocol.c
 )
 target_include_directories(ptcore PUBLIC src)
 
