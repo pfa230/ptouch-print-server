@@ -122,19 +122,41 @@ USB descriptors: Brother / PT-2730 / serial A4Z350200 (usb://Brother/PT-2730?ser
 
 ## Probe D (cut + leader) — ANSWERED
 
-Patched upstream ptouch-print with the 3 cut commands (printinfo 1b6963…, setmode 1b694d,
-setadvanced 1b694b) and printed with setmode(0x40)+setadvanced(0x08)+eject. Hardware observations:
+**VERIFIED cut model** — from the working `~/dotfiles/bin/print_zip_on_ptouch.sh` (one `ptouch-print`
+process, `--image A --cut --image B --cut … --image N`) on the **macOS fork**, confirmed by the user
+to produce "single precut, then chain-cut after each png." The proven logic is the fork's
+`flush_print_job` (defaults `do_precut=true`, `do_postcut=true`):
 
-- **Auto-cut works** (`setmode 0x40`): the printer cuts the label off after printing.
-- **No precut:** `setmode(0x40)` alone cuts only AFTER the label, not before. A clean leading edge
-  needs an explicit feed+cut at the start.
-- **`setadvanced(0x08)` effect: UNVERIFIED.** `0x08` (no-chain) was in the command stream and a cut
-  happened, but whether `0x08` vs chain `0x00` changes the feed-clear behavior was NOT observed.
-  Needs a chain-vs-no-chain A/B test. (An earlier draft wrongly claimed "fed clear as a separate
-  piece" — that was never reported.)
-- **Leader ≈ 2cm** of blank tape before content per cut — this is the **print-head-to-cutter
-  geometry** (inherent P-touch per-cut tape waste), far larger than the 48px (~0.7cm) image quirk.
-  This ~2cm is why cutting every *different* label wastes tape and why minimal-feed chaining matters.
+```
+per label:  needs_auto_cut = do_precut || (cut_after && !final)
+            if needs_auto_cut: printinfo(mm)
+            setmode( needs_auto_cut ? 0x40 : 0x00 )
+            want_chain = (!final) || !cut_after
+            setadvanced( want_chain ? 0x00 : 0x08 )
+            print_img
+            (cut_after && final) ? eject : ff
+batch of N: labels 1..N-1 → printinfo + setmode(0x40) + setadvanced(0x00 chain) + ff ;
+            final        → printinfo + setmode(0x40) + setadvanced(0x08 no-chain) + eject ;
+            do_precut makes setmode(0x40) active from label 1 → the leading "precut".
+```
+
+So **precut-once + chain-cut-after-each is a SOLVED, verified behavior** (the fork's `--cut`). M4
+replicates `flush_print_job` at the PAPPL page boundaries within one device session.
+
+My earlier single-label spike used the *final-label combo* (`setmode 0x40 + setadvanced 0x08 +
+eject`), so it correctly showed auto-cut but no precut, it was **not representative** of the batch
+sequence. The only standalone hardware facts that stand:
+- **Auto-cut works** (`setmode 0x40`): printer cuts after the label.
+- **Leader ≈ 2cm** of blank tape before content per cut — **print-head-to-cutter geometry** (inherent
+  per-cut tape waste), far larger than the 48px (~0.7cm) image quirk. This is the waste that the
+  chain mode minimizes between labels in one session.
+
+**M4 refinement (supersedes the Probe F read):** cuts-between-DIFFERENT-labels work in ONE device
+session (the fork proves it). For PAPPL that means a **multi-PAGE document** (PWG-raster/PDF, N pages
+in one document → driver gets N `rstartpage` → cut between), which is normal and accepted — NOT the
+multi-DOCUMENT IPP job (`N×Send-Document`) that Probe F found PAPPL rejects. `copies=N` covers
+identical labels. So M4: labeler sends a multi-page raster for a mixed batch, or uses `copies` for
+identical; the driver runs `flush_print_job` logic across the pages.
 - **Bonus / rendering:** upstream ptouch-print's `print_img` **misrendered the grayscale PNG**
   (arrow → "!"/space/line garbage; only the horizontal shaft partly showed). Confirms the macOS
   fork's **127/128 threshold fix is required** and that **PAPPL's own rasterization (Probe B,
