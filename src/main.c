@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <pappl/pappl.h>
 #include "driver.h"
 #include "device_usb.h"
@@ -12,6 +13,25 @@ static pappl_pr_driver_t g_drivers[] = {
 /* No autoadd: we create the one printer in-process (T3) on our ptouch:// scheme.
  * Passing NULL keeps PAPPL from auto-adding its built-in usb:// device, which
  * binds to the hanging transport (M0 Probe H). */
+
+/* `probe` subcommand: list ONLY our custom scheme (never PAPPL's built-in usb://,
+ * whose device-ID probe is the M0 hang). Safe regression check for the scheme. */
+static bool probe_print_cb(const char *info, const char *uri, const char *id, void *data)
+{
+    (void)id; (void)data;
+    printf("DEVICE: %s | %s\n", uri, info);
+    return false;  /* continue listing */
+}
+
+static int probe_cb(const char *base, int num_options, cups_option_t *options, void *data)
+{
+    (void)base; (void)num_options; (void)options; (void)data;
+    pt_usb_register();
+    printf("probing ptouch:// (CUSTOM_LOCAL only)...\n");
+    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, probe_print_cb, NULL, NULL, NULL);
+    printf("probe done\n");
+    return 0;
+}
 
 static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *data)
 {
@@ -34,5 +54,5 @@ int main(int argc, char *argv[])
 {
     return papplMainloop(argc, argv, "1.0", NULL,
                          NDRIVERS, g_drivers, NULL /*autoadd*/, pt_driver_cb,
-                         NULL, NULL, system_cb, NULL, NULL);
+                         "probe", probe_cb, system_cb, NULL, NULL);
 }
