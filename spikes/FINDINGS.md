@@ -119,3 +119,21 @@ USB descriptors: Brother / PT-2730 / serial A4Z350200 (usb://Brother/PT-2730?ser
   device layer. `ptouch-print`'s libusb path works (oracle), so this is proven viable.
 - **Probe C resolved by the same finding:** `papplDeviceRead` is unbounded/hangs; the bounded
   status read must use raw libusb with a real timeout in the custom device path.
+
+## Probe D (cut + leader) — ANSWERED
+
+Patched upstream ptouch-print with the 3 cut commands (printinfo 1b6963…, setmode 1b694d,
+setadvanced 1b694b) and printed with setmode(0x40)+setadvanced(0x08)+eject. Hardware observations:
+
+- **Auto-cut works** (`setmode 0x40`): the printer cuts the label off after printing.
+- **No precut:** `setmode(0x40)` alone cuts only AFTER the label, not before. A clean leading edge
+  needs an explicit feed+cut at the start.
+- **`setadvanced(0x08)` (no-chain):** the label fed clear of the cutter as a separate takeable piece.
+- **Leader ≈ 2cm** of blank tape before content per cut — this is the **print-head-to-cutter
+  geometry** (inherent P-touch per-cut tape waste), far larger than the 48px (~0.7cm) image quirk.
+  This ~2cm is why cutting every *different* label wastes tape and why minimal-feed chaining matters.
+- **Bonus / rendering:** upstream ptouch-print's `print_img` **misrendered the grayscale PNG**
+  (arrow → "!"/space/line garbage; only the horizontal shaft partly showed). Confirms the macOS
+  fork's **127/128 threshold fix is required** and that **PAPPL's own rasterization (Probe B,
+  correct) is the right rendering path**. The Probe A "baseline" was likely also garbage (never
+  visually verified) — disregard it; Probe B's PAPPL output is the trustworthy orientation result.
