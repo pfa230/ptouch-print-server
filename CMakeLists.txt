@@ -11,6 +11,7 @@ add_library(ptcore STATIC
   src/protocol.c
   src/raster.c
   src/status.c
+  src/cutter.c
 )
 target_include_directories(ptcore PUBLIC src)
 
