@@ -128,7 +128,10 @@ setadvanced 1b694b) and printed with setmode(0x40)+setadvanced(0x08)+eject. Hard
 - **Auto-cut works** (`setmode 0x40`): the printer cuts the label off after printing.
 - **No precut:** `setmode(0x40)` alone cuts only AFTER the label, not before. A clean leading edge
   needs an explicit feed+cut at the start.
-- **`setadvanced(0x08)` (no-chain):** the label fed clear of the cutter as a separate takeable piece.
+- **`setadvanced(0x08)` effect: UNVERIFIED.** `0x08` (no-chain) was in the command stream and a cut
+  happened, but whether `0x08` vs chain `0x00` changes the feed-clear behavior was NOT observed.
+  Needs a chain-vs-no-chain A/B test. (An earlier draft wrongly claimed "fed clear as a separate
+  piece" — that was never reported.)
 - **Leader ≈ 2cm** of blank tape before content per cut — this is the **print-head-to-cutter
   geometry** (inherent P-touch per-cut tape waste), far larger than the 48px (~0.7cm) image quirk.
   This ~2cm is why cutting every *different* label wastes tape and why minimal-feed chaining matters.
