@@ -90,3 +90,14 @@ Findings (12mm/76px tape loaded; force_raster_type=BLACK_1):
 - **M4 impact (revisit before building):** the cutter/batch design must change — `copies` for
   identical labels (cut per render), separate jobs for different labels; reconcile "cut after each"
   + chaining with per-copy vs per-job boundaries.
+
+## Auto-power-off — CORRECTED (false alarm)
+
+The PT-2730 manual lists a 5-min auto-off, which spawned a long detour (keep-alive / power-button
+hardware). Empirically that's WRONG while USB-tethered: a passive idle monitor (lsusb only, no
+device I/O) showed the printer **ON-BUS continuously past 10 minutes of pure idle**, and it had
+already sat ~37 min idle earlier and stayed on. So **it does NOT auto-off at 5 min when connected
+to a host.** (An earlier ~2h idle did find it off, so a much longer idle-off may exist; TBD, low
+priority.) NOTE: my first "ping" test falsely reported GONE because `ptouch-print --info` prints to
+stderr and the script did `2>/dev/null`. **Decision: no keep-alive, no power-button hardware, no
+embedded-Pi-for-power needed for the tethered architecture.**
