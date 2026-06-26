@@ -71,3 +71,22 @@ Findings (12mm/76px tape loaded; force_raster_type=BLACK_1):
 ## Probe F (job model) — partial
 - `options->copies`, `options->finishings`, `options->num_pages` are visible in the raster
   callbacks (logged per job). Multi-document / `last-document` test via Create-Job still pending.
+
+## Probe F (IPP job model) — ANSWERED (changes the M4 design)
+
+- **PAPPL rejects MULTI-DOCUMENT jobs.** `Create-Job` + `Send-Document(last-document=false)` OK,
+  but the 2nd `Send-Document` → `server-error-multiple-document-jobs-not-supported`. PAPPL printer
+  apps are **single-document-per-job**. **This invalidates the spec/plan batch model (one IPP job
+  + N×Send-Document + last-document).** Both the original design and Codex's "fix" assumed it.
+- **`copies` works at the driver level.** `copies=2` on a single document → the driver gets **N
+  `rstartpage`/`rendpage` renders** (one per copy), each with `options->copies=N`, `num_pages=1`.
+  So **N identical labels = one job, copies=N → cut after each render**.
+- **N different labels** cannot share a job (PNG is single-page; multi-document unsupported) → must
+  be **N separate IPP jobs**, or a single multi-page raster/PDF (outside PNG-only scope). The
+  "cut-between-different-labels, chained, one job" model is **not achievable on PAPPL with PNG**.
+- Visibility: `options->copies`, `options->finishings`, `options->num_pages` are all available in
+  the raster callbacks. (Sending `finishings=trim` needs the correct IPP enum; PAPPL advertises
+  `finishings-supported = none,trim`.)
+- **M4 impact (revisit before building):** the cutter/batch design must change — `copies` for
+  identical labels (cut per render), separate jobs for different labels; reconcile "cut after each"
+  + chaining with per-copy vs per-job boundaries.
