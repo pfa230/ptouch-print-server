@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <string.h>
 #include "tables.h"
 
 /* P-touch device family (transcribed from hannesweisbach/ptouch-print
@@ -38,6 +39,19 @@ const pt_dev *pt_lookup_dev(uint16_t vid, uint16_t pid)
 {
     for (const pt_dev *d = g_devs; d->name != NULL; d++) {
         if (d->vid == vid && d->pid == pid) {
+            return d;
+        }
+    }
+    return NULL;
+}
+
+const pt_dev *pt_lookup_name(const char *name)
+{
+    if (!name) {
+        return NULL;
+    }
+    for (const pt_dev *d = g_devs; d->name != NULL; d++) {
+        if (strcmp(d->name, name) == 0) {
             return d;
         }
     }
