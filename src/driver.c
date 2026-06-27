@@ -98,7 +98,8 @@ static bool status_cb(pappl_printer_t *printer)
     papplPrinterCloseDevice(printer);
 
     pt_status st;
-    if (n == 32 && pt_parse_status(buf, &st) == 0 && st.tape_px > 0) {
+    bool parsed = (n == 32 && pt_parse_status(buf, &st) == 0);
+    if (parsed && st.tape_px > 0) {
         pappl_media_col_t mc;
         if (media_col_for(st.tape_mm, &mc) &&
             papplPrinterSetReadyMedia(printer, 1, &mc))
@@ -106,7 +107,7 @@ static bool status_cb(pappl_printer_t *printer)
                                    PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
         else
             papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
-    } else if (n == 32 && pt_parse_status(buf, &st) == 0 && st.tape_mm == 0) {
+    } else if (parsed && st.tape_mm == 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
     } else if (n < 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
