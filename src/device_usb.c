@@ -142,11 +142,11 @@ static ssize_t pt_usb_write(pappl_device_t *device, const void *buffer, size_t b
         int t = 0;
         int rc = libusb_bulk_transfer(c->h, PT_EP_OUT, (unsigned char *)p + sent,
                                       (int)(bytes - sent), &t, PT_USB_TIMEOUT_MS);
-        if (rc == 0 || (rc == LIBUSB_ERROR_TIMEOUT && t > 0)) {
+        if ((rc == 0 || rc == LIBUSB_ERROR_TIMEOUT) && t > 0) {
             sent += (size_t)t;
             continue;
         }
-        return -1;  /* real error, or a timeout with no progress */
+        return -1;  /* real error, or zero progress (timeout/ZLP with no bytes) */
     }
     return (ssize_t)bytes;
 }

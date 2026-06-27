@@ -4,6 +4,7 @@
 #include <pappl/pappl.h>
 #include "driver.h"
 #include "device_usb.h"
+#include "protocol.h"
 
 static pappl_pr_driver_t g_drivers[] = {
     {"brother_ptouch", "Brother P-touch", NULL, NULL},
@@ -75,8 +76,51 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     return sys;
 }
 
+static bool smoke_saw_error = false;
+
+static void smoke_err_cb(const char *message, void *data)
+{
+    (void)data;
+    smoke_saw_error = true;
+    fprintf(stderr, "smoke: device error: %s\n", message);
+}
+
+/* Open the device, write a 2-byte init, flush, and confirm the bytes reached the
+ * wire. papplDeviceWrite only BUFFERS (2 bytes < PAPPL's buffer) and returns 2
+ * before pt_usb_write runs; the real bulk transfer happens in papplDeviceFlush.
+ * Success is judged by the device metric write_bytes (what the scheme write
+ * callback actually pushed), not papplDeviceWrite's return. Isolated transport
+ * check: no system, printer, or status read. */
+static int run_smoke(void)
+{
+    pt_usb_register();
+    pt_found found = {0};
+    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, grab_cb, &found, smoke_err_cb, NULL);
+    if (!found.found) {
+        fprintf(stderr, "smoke: no ptouch device found\n");
+        return 2;
+    }
+    pappl_device_t *dev = papplDeviceOpen(found.uri, "smoke", smoke_err_cb, NULL);
+    if (!dev) {
+        fprintf(stderr, "smoke: open failed for %s\n", found.uri);
+        return 3;
+    }
+    uint8_t init[8];
+    size_t n = pt_cmd_init(init);                 /* 1b 40, n == 2 */
+    papplDeviceWrite(dev, init, n);               /* buffered; returns before flush */
+    papplDeviceFlush(dev);                         /* the actual bulk OUT happens here */
+    pappl_devmetrics_t m;
+    papplDeviceGetMetrics(dev, &m);
+    papplDeviceClose(dev);
+    printf("smoke: device write_bytes=%zu write_requests=%zu to %s\n",
+           m.write_bytes, m.write_requests, found.uri);
+    return (!smoke_saw_error && m.write_bytes >= n) ? 0 : 1;  /* 1 = no real write */
+}
+
 int main(int argc, char *argv[])
 {
+    if (argc >= 2 && strcmp(argv[1], "smoke") == 0)
+        return run_smoke();
     return papplMainloop(argc, argv, "1.0", NULL,
                          NDRIVERS, g_drivers, NULL /*autoadd*/, pt_driver_cb,
                          "probe", probe_cb, system_cb, NULL, NULL);
