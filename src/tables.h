@@ -21,6 +21,9 @@ typedef struct {
 /* Look up a P-touch device by USB id; NULL if unknown. */
 const pt_dev *pt_lookup_dev(uint16_t vid, uint16_t pid);
 
+/* Look up a P-touch device by model name (e.g. "PT-2730"); NULL if unknown. */
+const pt_dev *pt_lookup_name(const char *name);
+
 /* Imageable px for a tape width in mm; 0 if unknown. */
 int pt_tape_px(int mm);
 
