@@ -79,8 +79,9 @@ static bool status_cb(pappl_printer_t *printer)
         dt = pt_lookup_dev(0x04f9, 0x2041);  /* fallback PT-2730 */
 
     if (!pt_usb_present(dt->vid, dt->pid)) {
-        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
-        return true;  /* unplugged: OFFLINE only, never MEDIA_EMPTY */
+        /* unplugged: OFFLINE only; drop any stale MEDIA_EMPTY from a prior poll */
+        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
+        return true;
     }
 
     pappl_device_t *dev = papplPrinterOpenDevice(printer);
@@ -121,7 +122,8 @@ static bool status_cb(pappl_printer_t *printer)
     } else if (parsed && st.tape_mm == 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
     } else if (n < 0) {
-        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
+        /* I/O error: device likely gone; OFFLINE, drop any stale MEDIA_EMPTY */
+        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
     } else {  /* 0 / short / garbled: transient, keep last-known media */
         papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
     }
