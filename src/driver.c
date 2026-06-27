@@ -4,6 +4,10 @@
 #include <pappl/pappl.h>
 #include "driver.h"
 #include "tables.h"
+#include "protocol.h"
+#include "status.h"
+#include "device_usb.h"
+#include <stdint.h>
 
 /* Candidate tape widths → PWG self-describing media names (W x 100mm continuous). */
 static const struct { int mm; const char *name; } pt_media[] = {
@@ -43,8 +47,74 @@ static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, 
 static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
 { (void)j; (void)o; (void)d; return true; }
 
-/* Status callback is a stub in T1; T4 (#13) does the real libusb status read. */
-static bool status_cb(pappl_printer_t *printer) { (void)printer; return true; }
+/* Fill a media-col for a loaded tape width (mm). Returns false if the width
+ * is not in the advertised table (caller should not publish it). */
+static bool media_col_for(int tape_mm, pappl_media_col_t *out)
+{
+    const char *name = NULL;
+    for (size_t i = 0; i < sizeof(pt_media) / sizeof(pt_media[0]); i++) {
+        if (pt_media[i].mm == tape_mm) { name = pt_media[i].name; break; }
+    }
+    if (!name)
+        return false;
+    memset(out, 0, sizeof(*out));
+    out->size_width = tape_mm * 100;   /* mm -> 1/100 mm */
+    out->size_length = 10000;          /* 100 mm continuous */
+    strncpy(out->size_name, name, sizeof(out->size_name) - 1);
+    strncpy(out->source, "main-roll", sizeof(out->source) - 1);
+    strncpy(out->type, "labels", sizeof(out->type) - 1);
+    out->tracking = PAPPL_MEDIA_TRACKING_CONTINUOUS;
+    return true;
+}
+
+/* Read the loaded tape over USB and publish media-ready + printer reasons.
+ * Distinguishes unplugged (OFFLINE) from in-use (NULL open while present). */
+static bool status_cb(pappl_printer_t *printer)
+{
+    char model[64];
+    parse_mdl(papplPrinterGetDeviceID(printer), model, sizeof model);
+    const pt_dev *dt = pt_lookup_name(model);
+    if (!dt)
+        dt = pt_lookup_dev(0x04f9, 0x2041);  /* fallback PT-2730 */
+
+    if (!pt_usb_present(dt->vid, dt->pid)) {
+        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
+        return true;  /* unplugged: OFFLINE only, never MEDIA_EMPTY */
+    }
+
+    pappl_device_t *dev = papplPrinterOpenDevice(printer);
+    if (!dev) {
+        /* present but not openable: a job owns it; clear OFFLINE, leave media */
+        papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
+        return true;
+    }
+
+    uint8_t req[8];
+    size_t rn = pt_cmd_status_request(req);
+    papplDeviceWrite(dev, req, rn);
+    papplDeviceFlush(dev);
+    uint8_t buf[32];
+    ssize_t n = papplDeviceRead(dev, buf, sizeof buf);
+    papplPrinterCloseDevice(printer);
+
+    pt_status st;
+    if (n == 32 && pt_parse_status(buf, &st) == 0 && st.tape_px > 0) {
+        pappl_media_col_t mc;
+        if (media_col_for(st.tape_mm, &mc) &&
+            papplPrinterSetReadyMedia(printer, 1, &mc))
+            papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
+                                   PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
+        else
+            papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
+    } else if (n == 32 && pt_parse_status(buf, &st) == 0 && st.tape_mm == 0) {
+        papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
+    } else if (n < 0) {
+        papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
+    } else {  /* 0 / short / garbled: transient, keep last-known media */
+        papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
+    }
+    return true;
+}
 
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *device_uri,
                   const char *device_id, pappl_pr_driver_data_t *data, ipp_t **driver_attrs, void *cbdata)
