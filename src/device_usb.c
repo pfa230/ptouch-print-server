@@ -165,6 +165,28 @@ static char *pt_usb_id(pappl_device_t *device, char *buffer, size_t bufsize)
     return buffer;
 }
 
+bool pt_usb_present(uint16_t vid, uint16_t pid)
+{
+    if (!g_ctx)
+        libusb_init(&g_ctx);
+
+    libusb_device **devs;
+    ssize_t n = libusb_get_device_list(g_ctx, &devs);
+    if (n < 0)
+        return false;
+
+    bool found = false;
+    for (ssize_t i = 0; i < n && !found; i++) {
+        struct libusb_device_descriptor d;
+        if (libusb_get_device_descriptor(devs[i], &d) != 0)
+            continue;
+        if (d.idVendor == vid && d.idProduct == pid)
+            found = true;  /* cached descriptor compare; no device I/O */
+    }
+    libusb_free_device_list(devs, 1);
+    return found;
+}
+
 void pt_usb_register(void)
 {
     if (!g_ctx)

@@ -31,6 +31,8 @@ static int probe_cb(const char *base, int num_options, cups_option_t *options,
     printf("probing ptouch:// (CUSTOM_LOCAL only)...\n");
     papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, probe_print_cb, NULL, NULL, NULL);
     printf("probe done\n");
+    printf("PRESENT 04f9:2041 = %s\n", pt_usb_present(0x04f9, 0x2041) ? "yes" : "no");
+    printf("PRESENT 04f9:0000 = %s\n", pt_usb_present(0x04f9, 0x0000) ? "yes" : "no");
     return 0;
 }
 
