@@ -8,6 +8,7 @@
 #include "status.h"
 #include "device_usb.h"
 #include <stdint.h>
+#include <time.h>
 
 /* Candidate tape widths → PWG self-describing media names (W x 100mm continuous). */
 static const struct { int mm; const char *name; } pt_media[] = {
@@ -89,12 +90,22 @@ static bool status_cb(pappl_printer_t *printer)
         return true;
     }
 
-    uint8_t req[8];
-    size_t rn = pt_cmd_status_request(req);
-    papplDeviceWrite(dev, req, rn);
+    uint8_t cmd[8];
+    size_t cn = pt_cmd_init(cmd);            /* ESC @ : reset parser so the device answers */
+    papplDeviceWrite(dev, cmd, cn);
+    size_t rn = pt_cmd_status_request(cmd);  /* ESC i S : status info request */
+    papplDeviceWrite(dev, cmd, rn);
     papplDeviceFlush(dev);
-    uint8_t buf[32];
-    ssize_t n = papplDeviceRead(dev, buf, sizeof buf);
+    /* The device may not have the 32-byte reply ready on the first read; poll a
+     * few times with a short delay, mirroring upstream ptouch_getstatus. Each
+     * read is itself bounded (2 s) so the loop cannot hang. */
+    uint8_t buf[32] = {0};
+    ssize_t n = 0;
+    for (int tries = 0; n == 0 && tries < 10; tries++) {
+        struct timespec w = {0, 100000000};  /* 0.1 s */
+        nanosleep(&w, NULL);
+        n = papplDeviceRead(dev, buf, sizeof buf);
+    }
     papplPrinterCloseDevice(printer);
 
     pt_status st;
