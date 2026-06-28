@@ -150,7 +150,7 @@ static bool status_cb(pappl_printer_t *printer)
     for (int tries = 0; n == 0 && tries < 10; tries++) {
         struct timespec w = {0, 100000000};  /* 0.1 s */
         nanosleep(&w, NULL);
-        n = papplDeviceRead(dev, buf, sizeof buf);
+        n = pt_usb_read_status(dev, buf, sizeof buf);
     }
     papplPrinterCloseDevice(printer);
 

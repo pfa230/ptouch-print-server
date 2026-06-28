@@ -17,6 +17,7 @@
 #define PT_EP_OUT         0x02   /* fixed across the Brother PT family (upstream) */
 #define PT_EP_IN          0x81
 #define PT_USB_TIMEOUT_MS 2000
+#define PT_USB_STATUS_TIMEOUT_MS 300
 
 typedef struct {
     libusb_context       *ctx;   /* per-connection context, exited on close */
@@ -147,6 +148,21 @@ static ssize_t pt_usb_read(pappl_device_t *device, void *buffer, size_t bytes)
         return t;
     if (rc == LIBUSB_ERROR_TIMEOUT)
         return t > 0 ? t : 0;  /* benign "no data yet" → 0, not error */
+    return -1;
+}
+
+ssize_t pt_usb_read_status(pappl_device_t *device, void *buffer, size_t bytes)
+{
+    pt_usb_conn *c = papplDeviceGetData(device);
+    if (!c)
+        return -1;
+    int t = 0;
+    int rc = libusb_bulk_transfer(c->h, PT_EP_IN, buffer, (int)bytes, &t,
+                                  PT_USB_STATUS_TIMEOUT_MS);
+    if (rc == 0)
+        return t;
+    if (rc == LIBUSB_ERROR_TIMEOUT)
+        return t > 0 ? t : 0;
     return -1;
 }
 
