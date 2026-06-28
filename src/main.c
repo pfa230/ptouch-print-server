@@ -62,6 +62,20 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     pt_usb_register();  /* register the scheme BEFORE any list/open */
     papplSystemSetPrinterDrivers(sys, NDRIVERS, g_drivers, NULL /*autoadd*/, NULL, pt_driver_cb, NULL);
 
+    /* Test override: create the printer on an explicit URI (e.g. a socket sink)
+     * instead of enumerating ptouch://. Lets the geometry gate run against
+     * socket://127.0.0.1:9100 with no PT-2730 involved (no physical printing). */
+    const char *override_uri = getenv("PTOUCH_DEVICE_URI");
+    if (override_uri && *override_uri) {
+        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
+                                                "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;",
+                                                override_uri);
+        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
+                 "%s printer for %s (PTOUCH_DEVICE_URI override)",
+                 p ? "Created" : "FAILED to create", override_uri);
+        return sys;
+    }
+
     /* In-process create from OUR scheme only (never the built-in usb:// hang). */
     pt_found found = {0};
     papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, grab_cb, &found, NULL, NULL);
