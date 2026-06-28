@@ -73,7 +73,10 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     uint8_t packed[16];
     pt_pack_line(packed, l, (int)width);
     uint8_t buf[24];
-    return pt_dev_write(d, buf, pt_cmd_sendraster(buf, packed, 16));
+    if (!pt_dev_write(d, buf, pt_cmd_sendraster(buf, packed, 16)))
+        return false;
+    papplDeviceFlush(d);  /* one transfer per line, like upstream; avoids bursts overrunning the printer buffer */
+    return true;
 }
 
 static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
@@ -83,11 +86,11 @@ static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, 
 static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
 {
     (void)j; (void)o;
+    papplDeviceFlush(d);  /* push any buffered raster so eject goes out standalone */
     uint8_t buf[8];
-    if (!pt_dev_write(d, buf, pt_cmd_eject(buf)))
-        return false;
+    bool ok = pt_dev_write(d, buf, pt_cmd_eject(buf));
     papplDeviceFlush(d);
-    return true;
+    return ok;
 }
 
 /* Fill a media-col for a loaded tape width (mm). Returns false if the width
