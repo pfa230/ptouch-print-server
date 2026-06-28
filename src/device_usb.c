@@ -19,21 +19,29 @@
 #define PT_USB_TIMEOUT_MS 2000
 
 typedef struct {
+    libusb_context       *ctx;   /* per-connection context, exited on close */
     libusb_device_handle *h;
     int detached;
 } pt_usb_conn;
 
-/* Private libusb context (isolated from PAPPL's own USB code); process-lifetime. */
-static libusb_context *g_ctx = NULL;
+/* Every enumeration uses a FRESH libusb context. A process-lifetime context goes
+ * stale across an unplug/replug in a container (no hotplug uevents reach it), so
+ * libusb_get_device_list keeps returning the old node and the printer never
+ * recovers (M2 T6). A fresh context always reflects current hardware. */
 
 static bool pt_usb_list(pappl_device_cb_t cb, void *data,
                         pappl_deverror_cb_t err_cb, void *err_data)
 {
     (void)err_cb; (void)err_data;
-    libusb_device **devs;
-    ssize_t n = libusb_get_device_list(g_ctx, &devs);
-    if (n < 0)
+    libusb_context *ctx = NULL;
+    if (libusb_init(&ctx) != 0)
         return false;
+    libusb_device **devs;
+    ssize_t n = libusb_get_device_list(ctx, &devs);
+    if (n < 0) {
+        libusb_exit(ctx);
+        return false;
+    }
 
     bool stop = false;
     for (ssize_t i = 0; i < n && !stop; i++) {
@@ -51,6 +59,7 @@ static bool pt_usb_list(pappl_device_cb_t cb, void *data,
         stop = cb(info, uri, id, data);  /* cb returns true to stop early */
     }
     libusb_free_device_list(devs, 1);
+    libusb_exit(ctx);
     return stop;
 }
 
@@ -60,10 +69,15 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
     const char *slash = strrchr(device_uri, '/');
     const char *model = slash ? slash + 1 : device_uri;
 
-    libusb_device **devs;
-    ssize_t n = libusb_get_device_list(g_ctx, &devs);
-    if (n < 0)
+    libusb_context *ctx = NULL;
+    if (libusb_init(&ctx) != 0)
         return false;
+    libusb_device **devs;
+    ssize_t n = libusb_get_device_list(ctx, &devs);
+    if (n < 0) {
+        libusb_exit(ctx);
+        return false;
+    }
 
     libusb_device_handle *h = NULL;
     int detached = 0;
@@ -88,16 +102,20 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
         break;  /* success */
     }
     libusb_free_device_list(devs, 1);
-    if (!h)
+    if (!h) {
+        libusb_exit(ctx);
         return false;
+    }
 
     pt_usb_conn *c = calloc(1, sizeof *c);
     if (!c) {
         libusb_release_interface(h, 0);
         if (detached) libusb_attach_kernel_driver(h, 0);
         libusb_close(h);
+        libusb_exit(ctx);
         return false;
     }
+    c->ctx = ctx;
     c->h = h;
     c->detached = detached;
     papplDeviceSetData(device, c);
@@ -113,6 +131,7 @@ static void pt_usb_close(pappl_device_t *device)
     if (c->detached)
         libusb_attach_kernel_driver(c->h, 0);
     libusb_close(c->h);
+    libusb_exit(c->ctx);
     free(c);
     papplDeviceSetData(device, NULL);
 }
@@ -167,13 +186,16 @@ static char *pt_usb_id(pappl_device_t *device, char *buffer, size_t bufsize)
 
 bool pt_usb_present(uint16_t vid, uint16_t pid)
 {
-    if (!g_ctx)
-        libusb_init(&g_ctx);
+    libusb_context *ctx = NULL;
+    if (libusb_init(&ctx) != 0)
+        return false;
 
     libusb_device **devs;
-    ssize_t n = libusb_get_device_list(g_ctx, &devs);
-    if (n < 0)
+    ssize_t n = libusb_get_device_list(ctx, &devs);
+    if (n < 0) {
+        libusb_exit(ctx);
         return false;
+    }
 
     bool found = false;
     for (ssize_t i = 0; i < n && !found; i++) {
@@ -184,13 +206,12 @@ bool pt_usb_present(uint16_t vid, uint16_t pid)
             found = true;  /* cached descriptor compare; no device I/O */
     }
     libusb_free_device_list(devs, 1);
+    libusb_exit(ctx);
     return found;
 }
 
 void pt_usb_register(void)
 {
-    if (!g_ctx)
-        libusb_init(&g_ctx);
     papplDeviceAddScheme("ptouch", PAPPL_DEVTYPE_CUSTOM_LOCAL,
                          pt_usb_list, pt_usb_open, pt_usb_close,
                          pt_usb_read, pt_usb_write, pt_usb_status, pt_usb_id);
