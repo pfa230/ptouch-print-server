@@ -5,6 +5,7 @@
 #include "driver.h"
 #include "tables.h"
 #include "protocol.h"
+#include "raster.h"
 #include "status.h"
 #include "device_usb.h"
 #include <stdint.h>
@@ -36,17 +37,58 @@ static void parse_mdl(const char *device_id, char *out, size_t n)
     out[i] = '\0';
 }
 
-/* Raster callbacks are no-op stubs in M2 (M3 fills them). */
+/* Write exactly n bytes through PAPPL's buffered device API; true iff accepted. */
+static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
+{
+    return papplDeviceWrite(device, buf, n) == (ssize_t)n;
+}
+
+/* Start of job: init the printer and select raster transfer mode.
+ * flags = 0: PT-2730 is FLAG_NONE. Per-model dispatch (P700 rasterstart variant,
+ * packbits) is deferred until there is non-PT-2730 hardware to verify it. */
 static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
-{ (void)j; (void)o; (void)d; return true; }
+{
+    (void)j; (void)o;
+    uint8_t buf[8];
+    if (!pt_dev_write(d, buf, pt_cmd_init(buf)))
+        return false;
+    if (!pt_dev_write(d, buf, pt_cmd_rasterstart(buf, 0)))
+        return false;
+    papplDeviceFlush(d);
+    return true;
+}
+
 static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 { (void)j; (void)o; (void)d; (void)p; return true; }
+
+/* One delivered scanline is one cross-tape Brother raster line (M0 Probe B). */
 static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned y, const unsigned char *l)
-{ (void)j; (void)o; (void)d; (void)y; (void)l; return true; }
+{
+    (void)y;
+    unsigned width = o->header.cupsWidth;
+    if (width > 128) {  /* do not silently crop a too-wide page */
+        papplLogJob(j, PAPPL_LOGLEVEL_ERROR, "raster width %u exceeds 128-dot head", width);
+        return false;
+    }
+    uint8_t packed[16];
+    pt_pack_line(packed, l, (int)width);
+    uint8_t buf[24];
+    return pt_dev_write(d, buf, pt_cmd_sendraster(buf, packed, 16));
+}
+
 static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 { (void)j; (void)o; (void)d; (void)p; return true; }
+
+/* End of job: print and cut the label. */
 static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
-{ (void)j; (void)o; (void)d; return true; }
+{
+    (void)j; (void)o;
+    uint8_t buf[8];
+    if (!pt_dev_write(d, buf, pt_cmd_eject(buf)))
+        return false;
+    papplDeviceFlush(d);
+    return true;
+}
 
 /* Fill a media-col for a loaded tape width (mm). Returns false if the width
  * is not in the advertised table (caller should not publish it). */
