@@ -1,0 +1,12 @@
+{
+    NAME "Get-Printer-Attributes (smoke: server answers IPP)"
+    OPERATION Get-Printer-Attributes
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR naturalLanguage attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR keyword requested-attributes all
+
+    STATUS successful-ok
+    EXPECT attributes-charset
+}
