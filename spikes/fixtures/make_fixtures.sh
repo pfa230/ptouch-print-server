@@ -8,7 +8,10 @@ python3 - "$DIR" "$TAPE_PX" <<'PY'
 import sys
 from PIL import Image, ImageDraw
 d, tape = sys.argv[1], int(sys.argv[2])
-def save(img, name): img.save(f"{d}/{name}.png")
+# Stamp 180 dpi so PAPPL renders the fixture 1:1 (with print-scaling=none it
+# places an image at its physical size from the DPI; a DPI-less PNG renders at a
+# default ppi and does not fill the requested media).
+def save(img, name): img.save(f"{d}/{name}.png", dpi=(180, 180))
 
 # arrow.png 300x64: asymmetric arrow pointing +x, with a tail-top block so BOTH
 # axes are distinguishable (catches transpose AND flip).

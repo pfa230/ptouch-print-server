@@ -12,7 +12,7 @@
 #include <time.h>
 #include <cups/cups.h>
 
-/* Tape widths (mm) we may advertise; 36mm (192px) is dropped at build time
+/* Tape widths (mm) we may advertise; 36mm (192px) is dropped at registration
  * because it exceeds the 128-dot head (pt_tape_px>0 && <=max_px filter). */
 static const int pt_tape_mm[] = { 6, 9, 12, 18, 24, 36 };
 
@@ -76,13 +76,7 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
 
 static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 {
-    (void)p;
-    /* Temporary geometry probe (kept for the Task 2 hardware run): proves the
-     * media math (exact cross-tape width, honored roll length, no scaling). */
-    papplLogJob(j, PAPPL_LOGLEVEL_INFO,
-        "GEOMDBG cupsWidth=%u cupsHeight=%u bpl=%u scaling=%d media=%s",
-        o->header.cupsWidth, o->header.cupsHeight, o->header.cupsBytesPerLine,
-        (int)o->print_scaling, o->media.size_name);
+    (void)j; (void)o; (void)p;
 #if PT_LEADER_PX > 0
     /* Leading-edge quirk: feed PT_LEADER_PX blank cross-tape lines so leading
      * content is not clipped. Adds to the cut length (Codex #4). Default 0. */
@@ -137,10 +131,10 @@ static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
  * width. size_name is owned by the struct copy, so formatting it here is safe. */
 static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out)
 {
+    memset(out, 0, sizeof(*out));  /* zero even on the false path so callers that ignore the return get a safe col */
     int px = pt_tape_px(tape_mm);
-    if (px <= 0 || px > 128)
+    if (px <= 0 || px > 128)       /* 128 = head width, the actual cross-tape limit */
         return false;
-    memset(out, 0, sizeof(*out));
     out->size_width = pt_px_to_centimm(px, dpi);
     out->size_length = length_centimm;
     pwgFormatSizeName(out->size_name, sizeof(out->size_name), NULL, NULL,

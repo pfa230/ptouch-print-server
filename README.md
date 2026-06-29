@@ -94,6 +94,19 @@ present (`pkg-config` finds `pappl` and `libusb-1.0`). On a machine without them
 CMake skips the app target and still builds the core and tests. The app is built
 and exercised against PT-2730 hardware in a container; see `Dockerfile`.
 
+### Printing notes for clients
+
+The printer advertises continuous-roll media (tape-width-fixed, length-variable
+`roll_min`/`roll_max` range) and uses `print-scaling=none`, so a label prints
+1:1. For a label to come out at its true size, a client must:
+
+- send the image at the printer resolution, **180 dpi** (a PNG with no DPI
+  metadata is placed at a default ppi and will not fill the requested media), and
+- request a `media-col` size matching the image (tape imageable width x label
+  length). The printer reports the loaded tape's printable width via
+  `media-ready`; note media is advertised at **printable**, not physical, width
+  (a 24 mm tape images ~18 mm, the 128-dot head).
+
 ## Configuration
 
 > **Planned (M4): not yet implemented.** The environment variables below are the
