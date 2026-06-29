@@ -109,17 +109,62 @@ The printer advertises continuous-roll media (tape-width-fixed, length-variable
 
 ## Configuration
 
-> **Planned (M4): not yet implemented.** The environment variables below are the
-> intended configuration surface for the cutter and width guard. They are **not**
-> wired up yet. Setting them today has no effect.
+The print path is configured entirely through environment variables (no config
+file or volume). The driver reads them per job.
 
-| Variable | Planned meaning |
-|----------|-----------------|
-| `PTOUCH_CUT_MODE` | Cut policy for a batch: each / end / none |
-| `PTOUCH_WIDTH_GUARD` | Refuse to print when the rendered width would overrun the loaded tape |
+| Variable | Values | Meaning |
+|----------|--------|---------|
+| `PTOUCH_CUT_MODE` | `each` (default) / `end` / `none` | Cut policy for a batch: cut after every label, only after the last, or never |
+| `PTOUCH_PRECUT` | `1` (default) / `0` | Feed and cut a leader before the first label of a batch |
+| `PTOUCH_WIDTH_GUARD` | `strict` (default) | Refuse to print when the rendered width does not match the loaded tape. Only `strict` is implemented; any other value falls back to `strict` |
 
-The cutter-plan logic (`src/cutter.c`, `pt_plan_batch`) exists as inert core
-infrastructure, but the driver does not yet dispatch on it.
+`PTOUCH_DEVICE_URI` overrides device discovery with an explicit URI (e.g.
+`socket://127.0.0.1:9100`) for testing without a PT-2730; the printer registers
+but only connects on an actual print.
+
+## Deploy
+
+The deploy image is published to GHCR as
+`ghcr.io/pfa230/ptouch-print-server:edge` (the moving tag) and a per-commit
+`sha-<commit>` tag for rollback. It is built and pushed by
+`.github/workflows/deploy.yml` on every push to `main`; pull requests build and
+run an IPP smoke test but do not push.
+
+The image is a multi-stage build (`Dockerfile.deploy`): PAPPL 1.4.11 and the app
+compile in a Debian build stage, and only the runtime libraries, `avahi-daemon`,
+and `dbus` ship in the `debian-bookworm-slim` runtime stage. The entrypoint
+starts a system dbus and Avahi (DNS-SD on the container's own LAN IP), then runs
+`ptouch-app server` on port 8000. The container has no persistent state, so no
+volume is needed.
+
+Run it on the LAN with its own IP and the PT-2730 passed through:
+
+```yaml
+services:
+  ptouch:
+    image: ghcr.io/pfa230/ptouch-print-server:edge
+    container_name: ptouch
+    restart: unless-stopped
+    hostname: ptouch
+    environment:
+      PTOUCH_CUT_MODE: each
+      PTOUCH_PRECUT: "1"
+      PTOUCH_WIDTH_GUARD: strict
+    devices:
+      - /dev/bus/usb:/dev/bus/usb        # PT-2730 USB passthrough
+    device_cgroup_rules:
+      - 'c 189:* rwm'                    # allow libusb to re-claim across replug
+    networks:
+      br0:
+        ipv4_address: 10.10.1.40         # its own LAN IP (adjust to your network)
+networks:
+  br0:
+    external: true
+```
+
+The PT-2730 USB interface can be held by only one process. A dev/spike container
+holding the device must be stopped before this container starts; both cannot own
+the device at once.
 
 ## Licensing
 

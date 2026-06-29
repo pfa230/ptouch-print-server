@@ -1,0 +1,68 @@
+name: deploy-image
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Metadata (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/pfa230/ptouch-print-server
+          flavor: latest=false
+          tags: |
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha
+      - name: Build (PR = load, no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.deploy
+          platforms: linux/amd64
+          load: true
+          tags: ptouch-deploy:pr
+      - name: Smoke (PR) - no hardware, no sink (Codex #2/#9)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends cups-ipp-utils
+          cleanup() { docker rm -f ptouch-smoke 2>/dev/null || true; }
+          trap cleanup EXIT
+          # socket:// registers the printer without a listener; attributes query needs no sink
+          docker run -d --name ptouch-smoke -p 18000:8000 \
+            -e PTOUCH_DEVICE_URI=socket://127.0.0.1:9100 ptouch-deploy:pr
+          for i in $(seq 1 15); do
+            if ipptool -t ipp://127.0.0.1:18000/ipp/print/ptouch \
+                 ./spikes/fixtures/get-printer-attributes.test 2>/dev/null | grep -qi successful-ok; then
+              echo "IPP OK"; break; fi
+            sleep 1
+          done
+          ipptool -t ipp://127.0.0.1:18000/ipp/print/ptouch \
+            ./spikes/fixtures/get-printer-attributes.test 2>&1 | grep -i successful-ok
+          docker logs ptouch-smoke 2>&1 | grep -iE "Created printer|avahi|error" | tail -5
+      - name: Build + push (main)
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.deploy
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
