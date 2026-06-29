@@ -9,6 +9,7 @@
 #include "status.h"
 #include "device_usb.h"
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 #include <cups/cups.h>
 
@@ -64,7 +65,33 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
  * packbits) is deferred until there is non-PT-2730 hardware to verify it. */
 static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
 {
-    (void)j; (void)o;
+    pappl_printer_t *printer = papplJobGetPrinter(j);
+
+    /* strict width guard (#19; fit policy is #35). PTOUCH_WIDTH_GUARD: default/strict.
+     * Any non-strict value (e.g. fit) is unimplemented -> fall back to strict, never accept. */
+    const char *gpol = getenv("PTOUCH_WIDTH_GUARD");
+    if (gpol && strcmp(gpol, "strict") != 0)
+        papplLogPrinter(printer, PAPPL_LOGLEVEL_WARN,
+                        "PTOUCH_WIDTH_GUARD=%s not implemented; using strict (#35)", gpol);
+
+    pappl_preason_t pr = papplPrinterGetReasons(printer);
+    pappl_pr_driver_data_t dd;
+    papplPrinterGetDriverData(printer, &dd);  /* fills dd with current driver data incl. media_ready */
+    int dpi = o->header.HWResolution[0] ? (int)o->header.HWResolution[0] : dd.x_default;
+    int loaded_px = (int)(dd.media_ready[0].size_width * dpi / 2540);  /* trunc, matches cupsRasterInitHeader */
+    unsigned w = o->header.cupsWidth;
+
+    bool unknown = (pr & (PAPPL_PREASON_MEDIA_EMPTY | PAPPL_PREASON_OFFLINE)) != 0;
+    if (unknown || (int)w != loaded_px) {
+        papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
+        papplJobSetMessage(j, "width guard (strict): job width %u px != loaded tape %d px%s",
+                           w, loaded_px, unknown ? " (tape unknown)" : "");
+        papplLogJob(j, PAPPL_LOGLEVEL_ERROR,
+                    "width guard (strict): job width %u px != loaded tape %d px%s",
+                    w, loaded_px, unknown ? " (tape unknown)" : "");
+        return false;  /* fault the job; no device I/O has happened */
+    }
+
     uint8_t buf[8];
     if (!pt_dev_write(d, buf, pt_cmd_init(buf)))
         return false;
