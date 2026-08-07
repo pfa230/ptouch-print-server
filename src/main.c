@@ -1,10 +1,12 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <pappl/pappl.h>
 #include "driver.h"
 #include "device_usb.h"
 #include "protocol.h"
+#include "tables.h"
 
 static pappl_pr_driver_t g_drivers[] = {
     {"brother_ptouch", "Brother P-touch", NULL, NULL},
@@ -85,7 +87,28 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
         papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
                  "%s printer for %s", p ? "Created" : "FAILED to create", found.uri);
     } else {
-        papplLog(sys, PAPPL_LOGLEVEL_WARN, "No ptouch device found at startup.");
+        /* No device attached: still create the printer so clients see a real
+         * queue reporting `offline` instead of client-error-not-found, and so a
+         * power-cycle recovers without restarting (status_cb clears OFFLINE on
+         * the next attribute query). #38 */
+        const char *model = getenv("PTOUCH_MODEL");
+        if (!model || !*model)
+            model = "PT-2730";
+        if (!pt_lookup_name(model)) {
+            papplLog(sys, PAPPL_LOGLEVEL_WARN,
+                     "PTOUCH_MODEL=%s is not a known model; using PT-2730", model);
+            model = "PT-2730";
+        }
+        char uri[256], id[256];
+        snprintf(uri, sizeof uri, "ptouch://Brother/%s", model);
+        snprintf(id, sizeof id, "MFG:Brother;MDL:%s;CMD:PT-CBP;", model);
+        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch", id, uri);
+        if (p)  /* mark offline NOW: without it reasons are `none`, the live-read gate in
+                 * r_startjob never fires, and the width guard silently uses the default 12mm media */
+            papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
+        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
+                 "%s offline printer for %s (no device at startup; awaiting connection)",
+                 p ? "Created" : "FAILED to create", uri);
     }
     return sys;
 }
