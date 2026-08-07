@@ -94,6 +94,9 @@ static bool pt_emit_op(pappl_device_t *d, const pt_op *op, uint8_t tape_mm)
     return true;
 }
 
+/* Defined below with status_cb; forward-declared for the #38 live read in r_startjob. */
+static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out);
+
 /* Tape mode/precut config. */
 static pt_cut_mode pt_env_cut_mode(pappl_printer_t *p)
 {
@@ -119,14 +122,58 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
         papplLogPrinter(printer, PAPPL_LOGLEVEL_WARN,
                         "PTOUCH_WIDTH_GUARD=%s not implemented; using strict (#35)", gpol);
 
-    pappl_preason_t pr = papplPrinterGetReasons(printer);
     pappl_pr_driver_data_t dd;
     papplPrinterGetDriverData(printer, &dd);  /* fills dd with current driver data incl. media_ready */
     int dpi = o->header.HWResolution[0] ? (int)o->header.HWResolution[0] : dd.x_default;
+
+    /* #38: a job queued while the printer was offline keeps a stale OFFLINE reason
+     * (PAPPL suppresses status_cb while a job holds the device), which the strict
+     * width guard would fault as "tape unknown". Re-read the live tape from the
+     * already-open device, but ONLY when:
+     *   (a) this is our ptouch:// device - pt_usb_read_status casts the device data
+     *       to our libusb struct, so calling it on socket:// is undefined behaviour; and
+     *   (b) the cached state is suspect - a healthy printer keeps the fast path
+     *       (a dead device can cost ~4s: 10 tries x (100ms sleep + 300ms timeout)). */
+    bool live_ok = false;
+    pt_status live = {0};
+    const char *duri = papplPrinterGetDeviceURI(printer);
+    pappl_preason_t pr0 = papplPrinterGetReasons(printer);
+    if (duri && !strncmp(duri, "ptouch://", 9) &&
+        (pr0 & (PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY))) {
+        uint8_t sc[8];
+        pt_dev_write(d, sc, pt_cmd_init(sc));
+        pt_dev_write(d, sc, pt_cmd_status_request(sc));
+        papplDeviceFlush(d);
+        uint8_t sbuf[32] = {0};
+        ssize_t sn = 0;
+        for (int tries = 0; sn == 0 && tries < 10; tries++) {
+            struct timespec w = {0, 100000000};  /* 0.1 s */
+            nanosleep(&w, NULL);
+            sn = pt_usb_read_status(d, sbuf, sizeof sbuf);
+        }
+        if (sn == 32 && pt_parse_status(sbuf, &live) == 0 && live.tape_px > 0) {
+            pappl_media_col_t mc;
+            if (media_col_for(live.tape_mm, 10000, dpi, &mc)) {
+                live_ok = true;
+                papplPrinterSetReadyMedia(printer, 1, &mc);
+                papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
+                                       PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
+            }
+        } else if (sn == 32 && pt_parse_status(sbuf, &live) == 0 && live.tape_mm == 0) {
+            papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
+        }
+    }
+
     int loaded_px = (int)(dd.media_ready[0].size_width * dpi / 2540);  /* trunc, matches cupsRasterInitHeader */
     unsigned w = o->header.cupsWidth;
 
-    bool unknown = (pr & (PAPPL_PREASON_MEDIA_EMPTY | PAPPL_PREASON_OFFLINE)) != 0;
+    /* reasons re-read AFTER the live block, which may have cleared them */
+    bool unknown = (papplPrinterGetReasons(printer) &
+                    (PAPPL_PREASON_MEDIA_EMPTY | PAPPL_PREASON_OFFLINE)) != 0;
+    if (live_ok) {                 /* live read wins over cached state (#38) */
+        loaded_px = live.tape_px;
+        unknown   = false;
+    }
     if (unknown || (int)w != loaded_px) {
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         papplJobSetMessage(j, "width guard (strict): job width %u px != loaded tape %d px%s",
@@ -134,7 +181,7 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
         papplLogJob(j, PAPPL_LOGLEVEL_ERROR,
                     "width guard (strict): job width %u px != loaded tape %d px%s",
                     w, loaded_px, unknown ? " (tape unknown)" : "");
-        return false;  /* fault the job; no device I/O has happened */
+        return false;  /* fault the job; no raster has been written */
     }
 
     uint8_t buf[8];
@@ -157,7 +204,9 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
 
     pt_batch *b = calloc(1, sizeof *b);
     if (!b) return false;
-    b->tape_mm = pt_mm_for_px(loaded_px);   /* loaded_px from the width guard; reverse-lookup to physical mm (Codex #1) */
+    /* live tape mm when the re-read succeeded; otherwise reverse-lookup from the
+     * width guard's loaded_px (Codex #1) */
+    b->tape_mm = live_ok ? (uint8_t)live.tape_mm : pt_mm_for_px(loaded_px);
     b->n_ops = pt_plan_batch(n, b->tape_mm, pt_env_cut_mode(printer), precut, b->ops, PT_OPS_CAP);
     if (b->n_ops < 0) {                      /* cap exceeded (Codex #5) */
         free(b);
