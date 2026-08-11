@@ -71,6 +71,11 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
      * only, so re-registering that pair would be silently dropped. */
     papplSystemAddMIMEFilter(sys, "image/png", PT_RASTER_FORMAT, pt_filter_png, NULL);
 
+    /* #41: a run that chained out to a queued job that never printed would leave
+     * the last label uncut at the head; this 1 s timer finalizes it once the
+     * queue has been quiet for ~3 s. */
+    papplSystemAddTimerCallback(sys, 0, 1, pt_chain_timer, NULL);
+
     /* Test override: create the printer on an explicit URI (e.g. a socket sink)
      * instead of enumerating ptouch://. Lets the geometry gate run against
      * socket://127.0.0.1:9100 with no PT-2730 involved (no physical printing). */
