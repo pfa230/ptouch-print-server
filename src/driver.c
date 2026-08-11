@@ -18,9 +18,7 @@
  * because it exceeds the 128-dot head (pt_tape_px>0 && <=max_px filter). */
 static const int pt_tape_mm[] = { 6, 9, 12, 18, 24, 36 };
 
-/* Roll length range and the discrete preset lengths, in 1/100 mm. */
-#define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
-#define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
+/* Discrete preset lengths, in mm (the roll range itself lives in driver.h). */
 static const int pt_preset_mm[] = { 25, 50, 100 };
 
 /* Durable storage for advertised media-size names: PAPPL keeps the const char*
@@ -309,6 +307,20 @@ static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     return true;
 }
 
+/* Raw-print callback. Only needed because PAPPL's validate_driver reads a
+ * non-null driver_data.format as "supports raw printing" and rejects the driver
+ * without a printfile_cb. PT_RASTER_FORMAT is a filter target, not a format a
+ * client can usefully send, so raw data in it faults (#40). */
+static bool pt_printfile_cb(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
+{
+    (void)o; (void)d;
+    papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
+    papplJobSetMessage(j, "raw '%s' data is not printable; send image/png", PT_RASTER_FORMAT);
+    papplLogJob(j, PAPPL_LOGLEVEL_ERROR,
+                "raw '%s' data is not printable; send image/png", PT_RASTER_FORMAT);
+    return false;
+}
+
 /* Fill a media-col for a loaded tape width (mm) at a continuous length (1/100 mm).
  * The cross-tape dimension is the tape's imageable px expressed in 1/100 mm
  * (round-trips to exactly pt_tape_px). Returns false for an unknown/too-wide
@@ -410,6 +422,12 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     data->rendpage_cb = r_endpage;
     data->rendjob_cb = r_endjob;
     data->status_cb = status_cb;
+    /* #40: our own raster destination type, so main.c's image/png filter is
+     * chosen ahead of PAPPL's built-in one. printfile_cb is mandatory alongside
+     * `format`; it only faults (see pt_printfile_cb). Side effect:
+     * PT_RASTER_FORMAT appears in document-format-supported. */
+    data->format = PT_RASTER_FORMAT;
+    data->printfile_cb = pt_printfile_cb;
 
     char model[64];
     parse_mdl(device_id, model, sizeof model);
