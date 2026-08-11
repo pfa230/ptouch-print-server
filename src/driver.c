@@ -67,13 +67,6 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
 typedef struct { pt_op ops[PT_OPS_CAP]; int n_ops; int n_labels; int index;
                 uint8_t tape_mm; bool started; bool finalized; } pt_batch;
 
-/* loaded imageable px -> physical tape mm (reverse of pt_tape_px), Codex #1. 0 if unknown. */
-static uint8_t pt_mm_for_px(int px)
-{
-    for (size_t i = 0; i < sizeof(pt_tape_mm) / sizeof(pt_tape_mm[0]); i++)
-        if (pt_tape_px(pt_tape_mm[i]) == px) return (uint8_t)pt_tape_mm[i];
-    return 0;
-}
 
 /* Render one planned op to the device (PRINT_PAGE is the raster, handled by rwriteline). */
 static bool pt_emit_op(pappl_device_t *d, const pt_op *op, uint8_t tape_mm)
@@ -164,7 +157,10 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
         }
     }
 
-    int loaded_px = (int)(dd.media_ready[0].size_width * dpi / 2540);  /* trunc, matches cupsRasterInitHeader */
+    /* #39: compare like for like in FULL-PAGE px. cupsWidth is the full media width on every
+     * CUPS version (cups/raster-stream.c: cupsWidth = media->width * xdpi / 2540); margins only
+     * populate ImageBox*. size_width is the nominal tape width, so this is the same space. */
+    int loaded_px = (int)(dd.media_ready[0].size_width * dpi / 2540);
     unsigned w = o->header.cupsWidth;
 
     /* reasons re-read AFTER the live block, which may have cleared them */
@@ -206,7 +202,9 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     if (!b) return false;
     /* live tape mm when the re-read succeeded; otherwise reverse-lookup from the
      * width guard's loaded_px (Codex #1) */
-    b->tape_mm = live_ok ? (uint8_t)live.tape_mm : pt_mm_for_px(loaded_px);
+    /* #39: size_width is the nominal tape width, so take mm from it directly; loaded_px is
+     * full-page px now and pt_mm_for_px() expects imageable px. */
+    b->tape_mm = live_ok ? (uint8_t)live.tape_mm : (uint8_t)(dd.media_ready[0].size_width / 100);
     b->n_ops = pt_plan_batch(n, b->tape_mm, pt_env_cut_mode(printer), precut, b->ops, PT_OPS_CAP);
     if (b->n_ops < 0) {                      /* cap exceeded (Codex #5) */
         free(b);
@@ -245,13 +243,26 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
 static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned y, const unsigned char *l)
 {
     (void)y;
-    unsigned width = o->header.cupsWidth;
-    if (width > 128) {  /* do not silently crop a too-wide page */
-        papplLogJob(j, PAPPL_LOGLEVEL_ERROR, "raster width %u exceeds 128-dot head", width);
+    /* #39: with nominal media sizes the page raster is the FULL tape width (cupsWidth),
+     * and the printable area is a window inside it - cupsWidth is NOT reduced by margins on
+     * any CUPS version (see cups/raster-stream.c: cupsWidth = media->width * xdpi / 2540).
+     * Extract [left_px, left_px + win) and centre that in the 128-dot head. With zero
+     * margins this degenerates to the previous behaviour (start 0, win = cupsWidth). */
+    int dpi   = o->header.HWResolution[0] ? (int)o->header.HWResolution[0] : 180;
+    int width = (int)o->header.cupsWidth;
+    int left  = o->media.left_margin  * dpi / 2540;
+    int right = o->media.right_margin * dpi / 2540;
+    int win   = width - left - right;
+    if (win > 128) win = 128;            /* never exceed the head */
+    if (win < 0)   win = 0;
+    if (left + win > width) win = width - left;
+    if (win <= 0) {
+        papplLogJob(j, PAPPL_LOGLEVEL_ERROR,
+                    "empty printable window (cupsWidth=%d left=%d right=%d)", width, left, right);
         return false;
     }
     uint8_t packed[16];
-    pt_pack_line(packed, l, (int)width);
+    pt_pack_window(packed, l, left, win);
     uint8_t buf[24];
     if (!pt_dev_write(d, buf, pt_cmd_sendraster(buf, packed, 16)))
         return false;
@@ -308,8 +319,15 @@ static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_
     int px = pt_tape_px(tape_mm);
     if (px <= 0 || px > 128)       /* 128 = head width, the actual cross-tape limit */
         return false;
-    out->size_width = pt_px_to_centimm(px, dpi);
+    /* #39: advertise the NOMINAL tape width with real margins, so clients can match the
+     * tape they bought (a 24mm template vs 24mm tape). The printable area is the
+     * head-limited imageable width; the difference is unprintable edge, expressed as
+     * symmetric left/right margins. Requires CUPS >= 2.5, where PAPPL passes margins into
+     * cupsRasterInitHeader so cupsWidth is the PRINTABLE width (2400-296-296 -> 128px). */
+    int printable = pt_px_to_centimm(px, dpi);
+    out->size_width = tape_mm * 100;
     out->size_length = length_centimm;
+    out->left_margin = out->right_margin = (out->size_width - printable) / 2;
     pwgFormatSizeName(out->size_name, sizeof(out->size_name), NULL, NULL,
                       out->size_width, length_centimm, "mm");
     strncpy(out->source, "main-roll", sizeof(out->source) - 1);
@@ -418,7 +436,12 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     data->x_default = data->y_default = dpi;
     /* 0/0 margins keep the imageable px exact: a nonzero margin would shrink
      * media->width-2*margin and perturb cupsWidth (Codex #4). */
-    data->left_right = 0;
+    /* #39: media-*-margin-supported. One printer-wide value; status_cb keeps it on the
+     * loaded tape's margin. Seeded from the safe default (12mm) before the first status read. */
+    {
+        int dpx = pt_tape_px(12);
+        data->left_right = dpx > 0 ? (1200 - pt_px_to_centimm(dpx, dpi)) / 2 : 0;
+    }
     data->bottom_top = 0;
 
     data->num_source = 1; data->source[0] = "main-roll";
@@ -439,7 +462,7 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
             continue;
         if (n + per_width + 2 > PT_MAX_MEDIA_NAMES || n + per_width + 2 > PAPPL_MAX_MEDIA)
             break;
-        int w100 = pt_px_to_centimm(px, dpi);
+        int w100 = pt_tape_mm[i] * 100;   /* #39: nominal tape width, not the imageable width */
         if (min_w100 == 0 || w100 < min_w100) min_w100 = w100;
         if (w100 > max_w100) max_w100 = w100;
         for (int k = 0; k < per_width; k++) {
