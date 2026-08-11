@@ -11,6 +11,7 @@
 #include "cutter.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <time.h>
 #include <cups/cups.h>
 
@@ -63,7 +64,8 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
 #define PT_OPS_PER_LABEL 5
 #define PT_OPS_CAP       (PT_MAX_LABELS * PT_OPS_PER_LABEL)
 typedef struct { pt_op ops[PT_OPS_CAP]; int n_ops; int n_labels; int index;
-                uint8_t tape_mm; bool started; bool finalized; } pt_batch;
+                uint8_t tape_mm; bool started; bool finalized;
+                pt_cut_mode mode; int precut; bool chain_out; } pt_batch;
 
 
 /* Render one planned op to the device (PRINT_PAGE is the raster, handled by rwriteline). */
@@ -97,6 +99,167 @@ static pt_cut_mode pt_env_cut_mode(pappl_printer_t *p)
     if (!strcmp(m, "none")) return PT_CUT_NONE;
     papplLogPrinter(p, PAPPL_LOGLEVEL_WARN, "PTOUCH_CUT_MODE=%s unknown; using each", m);
     return PT_CUT_EACH;
+}
+
+/* ---- cross-job chaining state (#41) -------------------------------------
+ * "chain open" means the last label of a job was finished with FF instead of
+ * EJECT, so the tape is still at the head and the run is not finalized. The
+ * idle timer runs on PAPPL's main loop while the raster callbacks run on a job
+ * thread, so every access takes g_chain_lock. Entries are keyed by printer ID,
+ * never by pappl_printer_t *: a stored pointer can dangle when the printer is
+ * deleted, an ID cannot (papplSystemFindPrinter just returns NULL). */
+#define PT_CHAIN_MAX        8
+#define PT_CHAIN_IDLE_TICKS 3   /* ~3 s of quiet before the idle finaliser cuts */
+
+static pthread_mutex_t g_chain_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { int printer_id; bool open; int idle_ticks; } g_chain[PT_CHAIN_MAX];
+
+/* Slot for this printer id, optionally allocating one. Call with the lock held. */
+static int pt_chain_slot(int id, bool create)
+{
+    int free_slot = -1;
+    for (int i = 0; i < PT_CHAIN_MAX; i++) {
+        if (g_chain[i].printer_id == id)
+            return i;
+        if (free_slot < 0 && g_chain[i].printer_id == 0)
+            free_slot = i;
+    }
+    if (!create || free_slot < 0)
+        return -1;
+    g_chain[free_slot].printer_id = id;
+    g_chain[free_slot].open = false;
+    g_chain[free_slot].idle_ticks = 0;
+    return free_slot;
+}
+
+/* Reserve this printer's slot. False means the table is full: do not chain,
+ * finalize normally (always safe, just one wasted leader). */
+static bool pt_chain_reserve(pappl_printer_t *printer)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    bool ok = pt_chain_slot(papplPrinterGetID(printer), true) >= 0;
+    pthread_mutex_unlock(&g_chain_lock);
+    return ok;
+}
+
+static void pt_chain_set(pappl_printer_t *printer, bool open)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(papplPrinterGetID(printer), open);
+    if (s >= 0) {
+        g_chain[s].open = open;
+        g_chain[s].idle_ticks = 0;
+    }
+    pthread_mutex_unlock(&g_chain_lock);
+}
+
+static bool pt_chain_get(pappl_printer_t *printer)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(papplPrinterGetID(printer), false);
+    bool open = s >= 0 && g_chain[s].open;
+    pthread_mutex_unlock(&g_chain_lock);
+    return open;
+}
+
+static void pt_chain_drop(int id)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(id, false);
+    if (s >= 0)
+        memset(&g_chain[s], 0, sizeof g_chain[s]);
+    pthread_mutex_unlock(&g_chain_lock);
+}
+
+/* Count a qualifying idle tick and report whether the finalise threshold is met. */
+static bool pt_chain_idle_ready(int id, bool quiet)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(id, false);
+    bool ready = false;
+    if (s >= 0) {
+        if (!quiet)
+            g_chain[s].idle_ticks = 0;
+        else if (++g_chain[s].idle_ticks >= PT_CHAIN_IDLE_TICKS)
+            ready = true;
+    }
+    pthread_mutex_unlock(&g_chain_lock);
+    return ready;
+}
+
+/* Drop the entry when PAPPL deletes the printer (tidy-up only: the ID lookup is
+ * what makes deletion safe). */
+static void pt_delete_cb(pappl_printer_t *printer, pappl_pr_driver_data_t *data)
+{
+    (void)data;
+    pt_chain_drop(papplPrinterGetID(printer));
+}
+
+typedef struct { pappl_job_t *self; bool with_processing; bool found; } pt_job_scan;
+
+static void pt_scan_job_cb(pappl_job_t *job, void *data)
+{
+    pt_job_scan *s = data;
+    if (job == s->self)
+        return;
+    ipp_jstate_t st = papplJobGetState(job);
+    if (st == IPP_JSTATE_PENDING || (s->with_processing && st == IPP_JSTATE_PROCESSING))
+        s->found = true;
+}
+
+/* Is another job actually runnable right now? papplPrinterGetNumberOfActiveJobs()
+ * is not a sound signal: it counts held, incomplete and stopped jobs and reads the
+ * array unlocked. Iterate instead and look for a distinct PENDING job. */
+static bool pt_has_pending_job(pappl_printer_t *printer, pappl_job_t *self)
+{
+    pt_job_scan s = { .self = self, .with_processing = false, .found = false };
+    papplPrinterIterateActiveJobs(printer, pt_scan_job_cb, &s, 1, 0);
+    return s.found;
+}
+
+/* Idle finaliser (#41): a run that chained out must never stay uncut when the
+ * job it chained to never prints. Registered as a 1 s system timer in main.c and
+ * called on PAPPL's main loop, so it resolves printer IDs on every tick and never
+ * holds g_chain_lock across a PAPPL call. */
+bool pt_chain_timer(pappl_system_t *system, void *cb_data)
+{
+    (void)cb_data;
+    int ids[PT_CHAIN_MAX], n = 0;
+
+    pthread_mutex_lock(&g_chain_lock);
+    for (int i = 0; i < PT_CHAIN_MAX; i++)
+        if (g_chain[i].printer_id)
+            ids[n++] = g_chain[i].printer_id;
+    pthread_mutex_unlock(&g_chain_lock);
+
+    for (int i = 0; i < n; i++) {
+        pappl_printer_t *printer = papplSystemFindPrinter(system, NULL, ids[i], NULL);
+        if (!printer) {                  /* printer gone: forget it */
+            pt_chain_drop(ids[i]);
+            continue;
+        }
+        pt_job_scan s = { .self = NULL, .with_processing = true, .found = false };
+        bool quiet = pt_chain_get(printer) && pt_env_cut_mode(printer) != PT_CUT_NONE &&
+                     papplPrinterGetState(printer) == IPP_PSTATE_IDLE;
+        if (quiet) {
+            papplPrinterIterateActiveJobs(printer, pt_scan_job_cb, &s, 1, 0);
+            quiet = !s.found;
+        }
+        if (!pt_chain_idle_ready(ids[i], quiet))
+            continue;
+
+        /* OpenDevice refuses while a job owns the device; that refusal, not the
+         * unlocked state observations above, is the definitive race guard. */
+        pappl_device_t *dev = papplPrinterOpenDevice(printer);
+        if (!dev)
+            continue;                    /* retry next tick, keep the chain open */
+        pt_op op = { .kind = PT_OP_EJECT };
+        papplLogPrinter(printer, PAPPL_LOGLEVEL_INFO, "finalizing stranded chained run (#41)");
+        if (pt_emit_op(dev, &op, 0))
+            pt_chain_set(printer, false);  /* clear BEFORE the close, which can start a job */
+        papplPrinterCloseDevice(printer);
+    }
+    return true;   /* stay scheduled */
 }
 
 /* Start of job: init the printer and select raster transfer mode.
@@ -203,14 +366,16 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     /* #39: size_width is the nominal tape width, so take mm from it directly; loaded_px is
      * full-page px now and pt_mm_for_px() expects imageable px. */
     b->tape_mm = live_ok ? (uint8_t)live.tape_mm : (uint8_t)(dd.media_ready[0].size_width / 100);
-    b->n_ops = pt_plan_batch(n, b->tape_mm, pt_env_cut_mode(printer), precut, false, b->ops, PT_OPS_CAP);
+    b->mode = pt_env_cut_mode(printer);
+    b->precut = precut;
+    b->n_ops = pt_plan_batch(n, b->tape_mm, b->mode, precut, false, b->ops, PT_OPS_CAP);
     if (b->n_ops < 0) {                      /* cap exceeded (Codex #5) */
         free(b);
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         papplJobSetMessage(j, "cutter plan overflow for %d copies", n);
         return false;
     }
-    b->n_labels = n; b->index = 0; b->started = false; b->finalized = false;
+    b->n_labels = n; b->index = 0; b->started = false; b->finalized = false; b->chain_out = false;
     papplJobSetData(j, b);
     return true;
 }
@@ -221,6 +386,26 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     pt_batch *b = papplJobGetData(j);
     if (!b) return true;
     b->started = true;   /* a label has begun (Codex #2: enables abnormal-exit detach) */
+
+    /* #41: the chain bit goes out with THIS label's pre-print ops, so the decision
+     * must happen before them. If another job is already queued, re-plan the batch
+     * with chain_out so the last label is planned like a non-final one (FF, no
+     * eject, autocut untouched); only that label's ops change and every earlier
+     * label has already been emitted. */
+    if (b->index == b->n_labels - 1 && b->mode != PT_CUT_NONE && !b->chain_out) {
+        pappl_printer_t *printer = papplJobGetPrinter(j);
+        if (pt_has_pending_job(printer, j) && pt_chain_reserve(printer)) {
+            int n = pt_plan_batch(b->n_labels, b->tape_mm, b->mode, b->precut, true,
+                                  b->ops, PT_OPS_CAP);
+            if (n > 0) {
+                b->n_ops = n;
+                b->chain_out = true;
+                papplLogJob(j, PAPPL_LOGLEVEL_INFO,
+                            "chaining out to the next queued job: last label ends with FF (#41)");
+            }
+        }
+    }
+
     for (int k = 0; k < b->n_ops; k++) {
         if (b->ops[k].page_index != b->index) continue;
         if (b->ops[k].kind == PT_OP_PRINT_PAGE) break;   /* raster follows */
@@ -282,9 +467,25 @@ static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, 
         if (b->ops[k].kind == PT_OP_PRINT_PAGE) seen_print = 1;
     }
     pt_op op = { .kind = (papplJobIsCanceled(j) || finish == PT_OP_EJECT) ? PT_OP_EJECT : PT_OP_FF };
-    if (op.kind == PT_OP_EJECT) b->finalized = true;
+    pappl_printer_t *printer = papplJobGetPrinter(j);
+    bool last = (b->index == b->n_labels - 1);
+
+    /* #41 arm-then-clear: mark the chain open BEFORE any finish write, and clear it
+     * only for an EJECT that was actually written. Arming first is what gives the
+     * idle timer something to retry when the write fails - merely retaining a flag
+     * that a single job never set would leave the tape uncut with nobody to finish
+     * it. A chained FF keeps the flag set either way: on success because the next
+     * job continues the run, on failure so the timer finalizes it. */
+    if (op.kind == PT_OP_EJECT || (last && b->chain_out))
+        pt_chain_set(printer, true);
+
     bool ok = pt_emit_op(d, &op, b->tape_mm);
-    b->index++;
+    if (op.kind == PT_OP_EJECT && ok) {
+        pt_chain_set(printer, false);
+        b->finalized = true;    /* only a written EJECT counts as finalized */
+    }
+    if (ok)
+        b->index++;             /* a failed finish leaves index short so r_endjob still ejects */
     return ok;
 }
 
@@ -297,9 +498,23 @@ static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
      * labels, and no finalizing EJECT ran. This (a) catches a write error during the first
      * label (index 0) (Codex #2), and (b) does NOT eject on normal PT_CUT_NONE completion where
      * index == n_labels and finalized stays false (Codex #3). */
+    pappl_printer_t *printer = papplJobGetPrinter(j);
     if (b && b->started && b->index < b->n_labels && !b->finalized) {
         pt_op op = { .kind = PT_OP_EJECT };
-        pt_emit_op(d, &op, b->tape_mm);   /* detach printed labels; best effort */
+        pt_chain_set(printer, true);            /* arm-then-clear (#41) */
+        if (pt_emit_op(d, &op, b->tape_mm))     /* detach printed labels; best effort */
+            pt_chain_set(printer, false);
+    } else if (b && b->chain_out && pt_chain_get(printer) && !pt_has_pending_job(printer, j)) {
+        /* #41 late re-check: the job we chained to was cancelled while we printed
+         * (this job is still active, hence the self exclusion), so nothing will
+         * finish the run. Finalize now while we still own the device. The chain
+         * flag gates this: a cancelled job already ejected and cleared it, and
+         * ejecting twice would feed and cut blank tape. */
+        pt_op op = { .kind = PT_OP_EJECT };
+        papplLogJob(j, PAPPL_LOGLEVEL_INFO, "chained-to job is gone; finalizing now (#41)");
+        pt_chain_set(printer, true);
+        if (pt_emit_op(d, &op, b->tape_mm))
+            pt_chain_set(printer, false);
     }
     papplDeviceFlush(d);
     free(b);
@@ -361,6 +576,7 @@ static bool status_cb(pappl_printer_t *printer)
     if (!pt_usb_present(dt->vid, dt->pid)) {
         /* unplugged: OFFLINE only; drop any stale MEDIA_EMPTY from a prior poll */
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
+        pt_chain_set(printer, false);   /* #41: the tape left with the device */
         return true;
     }
 
@@ -392,6 +608,12 @@ static bool status_cb(pappl_printer_t *printer)
     pt_status st;
     bool parsed = (n == 32 && pt_parse_status(buf, &st) == 0);
     if (parsed && st.tape_px > 0) {
+        /* #41: a cassette swapped mid-chain must not inherit the flag - the tape at
+         * the head is gone, so treat the run as finished (the next job pre-cuts). */
+        pappl_pr_driver_data_t dd;
+        papplPrinterGetDriverData(printer, &dd);
+        if ((int)(dd.media_ready[0].size_width / 100) != st.tape_mm)
+            pt_chain_set(printer, false);
         pappl_media_col_t mc;
         if (media_col_for(st.tape_mm, 10000, dt->dpi, &mc) &&
             papplPrinterSetReadyMedia(printer, 1, &mc))
@@ -401,9 +623,11 @@ static bool status_cb(pappl_printer_t *printer)
             papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
     } else if (parsed && st.tape_mm == 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
+        pt_chain_set(printer, false);   /* #41: no tape, nothing to finalize */
     } else if (n < 0) {
         /* I/O error: device likely gone; OFFLINE, drop any stale MEDIA_EMPTY */
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
+        pt_chain_set(printer, false);   /* #41 */
     } else {  /* 0 / short / garbled: transient, keep last-known media */
         papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
     }
@@ -422,6 +646,7 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     data->rendpage_cb = r_endpage;
     data->rendjob_cb = r_endjob;
     data->status_cb = status_cb;
+    data->delete_cb = pt_delete_cb;   /* #41: forget this printer's chain state */
     /* #40: our own raster destination type, so main.c's image/png filter is
      * chosen ahead of PAPPL's built-in one. printfile_cb is mandatory alongside
      * `format`; it only faults (see pt_printfile_cb). Side effect:

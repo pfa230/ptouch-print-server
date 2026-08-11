@@ -15,6 +15,10 @@
 #define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
 #define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
 
+/* Idle finaliser for cross-job chaining (#41). Register as a 1 s system timer:
+ * it ejects (and cuts) a run that chained out to a job that never printed. */
+bool pt_chain_timer(pappl_system_t *system, void *cb_data);
+
 /* Fill driver_data for a P-touch printer (PAPPL pappl_pr_driver_cb_t). */
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name,
                   const char *device_uri, const char *device_id,
