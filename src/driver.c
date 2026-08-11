@@ -203,7 +203,7 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     /* #39: size_width is the nominal tape width, so take mm from it directly; loaded_px is
      * full-page px now and pt_mm_for_px() expects imageable px. */
     b->tape_mm = live_ok ? (uint8_t)live.tape_mm : (uint8_t)(dd.media_ready[0].size_width / 100);
-    b->n_ops = pt_plan_batch(n, b->tape_mm, pt_env_cut_mode(printer), precut, b->ops, PT_OPS_CAP);
+    b->n_ops = pt_plan_batch(n, b->tape_mm, pt_env_cut_mode(printer), precut, false, b->ops, PT_OPS_CAP);
     if (b->n_ops < 0) {                      /* cap exceeded (Codex #5) */
         free(b);
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
