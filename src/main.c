@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <pappl/pappl.h>
 #include "driver.h"
+#include "filter_png.h"
 #include "device_usb.h"
 #include "protocol.h"
 #include "tables.h"
@@ -63,6 +64,12 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     papplSystemAddListeners(sys, NULL);
     pt_usb_register();  /* register the scheme BEFORE any list/open */
     papplSystemSetPrinterDrivers(sys, NDRIVERS, g_drivers, NULL /*autoadd*/, NULL, pt_driver_cb, NULL);
+
+    /* #40: take over image/png so the label length follows the image. Must run
+     * before papplSystemRun, and must target our own PT_RASTER_FORMAT: PAPPL
+     * already has image/png -> image/pwg-raster and matches filters on src+dst
+     * only, so re-registering that pair would be silently dropped. */
+    papplSystemAddMIMEFilter(sys, "image/png", PT_RASTER_FORMAT, pt_filter_png, NULL);
 
     /* Test override: create the printer on an explicit URI (e.g. a socket sink)
      * instead of enumerating ptouch://. Lets the geometry gate run against

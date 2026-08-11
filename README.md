@@ -101,11 +101,19 @@ The printer advertises continuous-roll media (tape-width-fixed, length-variable
 1:1. For a label to come out at its true size, a client must:
 
 - send the image at the printer resolution, **180 dpi** (a PNG with no DPI
-  metadata is placed at a default ppi and will not fill the requested media), and
-- request a `media-col` size matching the image (tape imageable width x label
-  length). The printer reports the loaded tape's printable width via
-  `media-ready`; note media is advertised at **printable**, not physical, width
-  (a 24 mm tape images ~18 mm, the 128-dot head).
+  metadata is read as 180 dpi), and
+- match the loaded tape across its width. The printer reports the tape via
+  `media-ready` at its **nominal** width, with the unprintable edge expressed as
+  left/right margins (a 24 mm tape images ~18 mm, the 128-dot head); a job whose
+  rendered width does not match the loaded tape is refused.
+
+**Label length follows the PNG.** A submitted `image/png` prints at the physical
+length of the image itself (its along-the-tape pixel count divided by its DPI),
+so no `media-col` length is needed and there are no blank runs before and after
+the content. Lengths below the 5 mm roll minimum are padded up to it; anything
+over the 300 mm roll maximum is refused rather than cropped. JPEG is unaffected:
+it still goes through PAPPL's built-in filter and prints on the fixed media
+length.
 
 ## Configuration
 
