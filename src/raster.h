@@ -15,4 +15,9 @@
  * (labeler / PAPPL bi-level) owns gray->B/W. */
 void pt_pack_line(uint8_t out[16], const uint8_t *in, int width);
 
+/* Pack `width` bits starting at bit `start` of `in`, centred in the 128-dot head.
+ * Used when the page raster is wider than the printable area (nominal media size
+ * with margins: cupsWidth is the FULL tape width, the printable area is a window). */
+void pt_pack_window(uint8_t out[16], const uint8_t *in, int start, int width);
+
 #endif /* PT_RASTER_H */
