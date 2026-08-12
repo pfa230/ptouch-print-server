@@ -376,7 +376,12 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     bool unknown = (papplPrinterGetReasons(printer) &
                     (PAPPL_PREASON_MEDIA_EMPTY | PAPPL_PREASON_OFFLINE)) != 0;
     if (live_ok) {                 /* live read wins over cached state (#38) */
-        loaded_px = live.tape_px;
+        /* #43: compare like for like. live.tape_px is the IMAGEABLE width (128 for 24mm),
+         * but `w` is cupsWidth, which since #39 is the FULL nominal page width (170 for
+         * 24mm). Convert the live tape to the same nominal space instead of mixing them -
+         * the old assignment faulted correct jobs whenever this branch fired, and is the
+         * source of the "!= loaded tape 128 px" message reported in #43. */
+        loaded_px = (int)((live.tape_mm * 100) * dpi / 2540);
         unknown   = false;
     }
     if (unknown || (int)w != loaded_px) {
