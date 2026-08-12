@@ -11,23 +11,33 @@ The Brother raster protocol and device table are reused from
 
 ## Status
 
-The project is built in milestones. Only the **Brother PT-2730** is
-hardware-certified; the print path currently emits PT-2730 protocol for every
-device.
+Working and deployed. Only the **Brother PT-2730** is hardware-certified; the
+print path emits PT-2730 protocol for every device.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M0 | Hardware spike: confirm the raster bytes and the `usb://` hang on real hardware | Done |
 | M1 | Pure C core: device table, protocol command builders, raster packing, status parse | Done |
 | M2 | PAPPL adapter and read path: custom `ptouch://` libusb scheme, media/status callback | Done |
-| M3 | Print path: raster callbacks that print and cut on the PT-2730 | In progress |
-| M4 | Cutter modes and width guard (`PTOUCH_*` configuration) | Pending |
-| M5 | Packaging | Pending |
+| M3 | Print path: 1:1 geometry, roll media, per-tape imageable width | Done |
+| M4 | Cutter modes, chaining, and the strict width guard | Done |
+| M5 | Packaging, GHCR publishing, container deployment | Done |
 
-M3 raster callbacks print and cut a label on the PT-2730 today
-(init / rasterstart / sendraster per line / eject). The exact print geometry is
-still being finished: no-scaling fit, variable label length, and head-limiting
-behaviour are not yet final.
+What it does today:
+
+- Prints 1:1 at the tape's imageable width, with the label length taken from the
+  submitted image rather than a fixed page.
+- Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
+  match the tape they actually loaded.
+- Pre-cuts once, cuts labels apart, and **chains consecutive queued jobs** so a
+  pool of jobs costs one leader rather than one per job.
+- Rejects a job whose width does not match the loaded tape, before anything is
+  sent to the printer.
+- Reports `offline` when the printer is switched off instead of disappearing, and
+  recovers on its own when it comes back - queued jobs then print.
+
+Known gaps are tracked as issues: cross-tape centring is uncalibrated, and
+`PTOUCH_CUT_MODE=end` cuts every label when pre-cut is enabled.
 
 ## Architecture
 
@@ -141,11 +151,8 @@ run an IPP smoke test but do not push.
 The image is a multi-stage build (`Dockerfile.deploy`): PAPPL 1.4.11 and the app
 compile in a Debian build stage, and only the runtime libraries, `avahi-daemon`,
 and `dbus` ship in the `debian-bookworm-slim` runtime stage. The entrypoint
-starts a system dbus and Avahi (DNS-SD on the container's own LAN IP), then runs
-`ptouch-app server` on port 8000. The container has no persistent state, so no
-volume is needed.
-
-Run it on the LAN with its own IP and the PT-2730 passed through:
+starts a system dbus and Avahi, then runs `ptouch-app server` on port 8000. The
+container has no persistent state, so no volume is needed.
 
 ```yaml
 services:
@@ -154,25 +161,60 @@ services:
     container_name: ptouch
     restart: unless-stopped
     hostname: ptouch
+    ulimits:
+      nofile:                            # dbus needs 65536; below that it dies,
+        soft: 65536                      # avahi dies with it, and DNS-SD
+        hard: 65536                      # advertises nothing at all
     environment:
       PTOUCH_CUT_MODE: each
       PTOUCH_PRECUT: "1"
       PTOUCH_WIDTH_GUARD: strict
-    devices:
-      - /dev/bus/usb:/dev/bus/usb        # PT-2730 USB passthrough
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb        # BIND MOUNT, not `devices:` - see below
     device_cgroup_rules:
-      - 'c 189:* rwm'                    # allow libusb to re-claim across replug
+      - 'c 189:* rwm'                    # allow libusb to claim USB char devices
     networks:
-      br0:
-        ipv4_address: 10.10.1.40         # its own LAN IP (adjust to your network)
-networks:
-  br0:
-    external: true
+      some_shared_net:                   # a network the client also joins
+        aliases:
+          - ptouch.local                 # PAPPL accepts *.local as a Host header
 ```
+
+**Use a bind mount for `/dev/bus/usb`, not compose `devices:`.** `devices:` maps
+only the device nodes that exist when the container starts. Power-cycling the
+printer creates a new node, which the container can then never see: it retries
+the stale one indefinitely and only a container restart recovers it. A bind
+mount propagates new nodes; the cgroup rule grants access to USB char devices.
+
+**Addressing it.** PAPPL rejects any HTTP `Host` that is not an IP address,
+`localhost`, or a `*.local` name, with `400 Bad Request`. So address it by IP, by
+a `.local` name, or, behind a reverse proxy, rewrite the header:
+
+```caddyfile
+@ptouch host ptouch.example.com
+reverse_proxy @ptouch http://ptouch:8000 {
+  header_up Host ptouch.local:8000
+}
+```
+
+IPP is HTTP over TCP, so it proxies normally; keep response buffering off so
+raster streams.
+
+**Discovery.** The container advertises DNS-SD over mDNS when it is on the LAN
+segment itself. Behind a proxy, or on a bridge network, mDNS will not reach LAN
+clients: publish unicast DNS-SD records (RFC 6763 `_ipp._tcp` PTR/SRV/TXT) in
+your zone instead, pointing at wherever clients should connect.
 
 The PT-2730 USB interface can be held by only one process. A dev/spike container
 holding the device must be stopped before this container starts; both cannot own
 the device at once.
+
+## Design decisions
+
+The reasoning behind the architecture, including several corrections, is recorded
+as ADRs in [`docs/adr/`](docs/adr/README.md) - why this is its own PAPPL
+application, why the USB scheme is custom, why media is advertised at nominal tape
+width, why the app owns the PNG filter, how offline and job chaining work, and why
+the licence is GPL-3.0.
 
 ## Licensing
 
