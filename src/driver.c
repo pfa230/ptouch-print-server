@@ -341,12 +341,52 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
         return false;  /* fault the job; no raster has been written */
     }
 
+    /* #41: when a chain is already open the previous job left the tape unfinalised and
+     * PAPPL kept the device open (it only closes when active_jobs hits 0, see
+     * job-process.c). Re-sending ESC @ mid-chain resets the printer's state and made a
+     * PT-2730 report "Tape cassette changed!" and stop accepting data, so skip the
+     * init/rasterstart prologue while chained in. The per-label PRINTINFO/SETMODE from the
+     * plan still run, which is what keeps autocut working. */
     uint8_t buf[8];
-    if (!pt_dev_write(d, buf, pt_cmd_init(buf)))
-        return false;
-    if (!pt_dev_write(d, buf, pt_cmd_rasterstart(buf, 0)))
-        return false;
-    papplDeviceFlush(d);
+    bool chain_in = pt_chain_get(printer);
+    if (chain_in) {
+        /* #41 attempt 3, ONE variable: skip only ESC @ (the parser/state reset that is the
+         * suspected trigger for "Tape cassette changed"), but KEEP rasterstart - attempt 2
+         * dropped both and stalled, which may simply have left the printer out of raster mode.
+         *
+         * Diagnostic: before writing anything, drain any status block the printer pushed at the
+         * chain boundary. Brother reports state changes unsolicited, so if it latched a
+         * cassette-changed condition this both reveals the exact error bits and may clear it. */
+        const char *duri = papplPrinterGetDeviceURI(printer);
+        if (duri && !strncmp(duri, "ptouch://", 9)) {
+            uint8_t sb[32] = {0};
+            ssize_t sn = pt_usb_read_status(d, sb, sizeof sb);
+            if (sn == 32) {
+                pt_status st;
+                bool ok_parse = (pt_parse_status(sb, &st) == 0);
+                papplLogJob(j, PAPPL_LOGLEVEL_INFO,
+                            "chain boundary: unsolicited status error=0x%04x tape=%dmm parsed=%d",
+                            ok_parse ? st.error : 0xffff, ok_parse ? st.tape_mm : -1, ok_parse);
+                papplLogJob(j, PAPPL_LOGLEVEL_INFO,
+                            "chain boundary raw: %02x %02x %02x %02x %02x %02x %02x %02x "
+                            "%02x %02x %02x %02x", sb[0], sb[1], sb[2], sb[3], sb[4], sb[5],
+                            sb[6], sb[7], sb[8], sb[9], sb[10], sb[11]);
+            } else {
+                papplLogJob(j, PAPPL_LOGLEVEL_INFO,
+                            "chain boundary: no pending status (read=%ld)", (long)sn);
+            }
+        }
+        papplLogJob(j, PAPPL_LOGLEVEL_INFO, "chained in: skipping ESC @, keeping rasterstart");
+        if (!pt_dev_write(d, buf, pt_cmd_rasterstart(buf, 0)))
+            return false;
+        papplDeviceFlush(d);
+    } else {
+        if (!pt_dev_write(d, buf, pt_cmd_init(buf)))
+            return false;
+        if (!pt_dev_write(d, buf, pt_cmd_rasterstart(buf, 0)))
+            return false;
+        papplDeviceFlush(d);
+    }
 
     int n = papplJobGetCopies(j);
     if (n < 1) n = 1;
