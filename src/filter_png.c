@@ -160,6 +160,13 @@ bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
     }
     ppi = ydpi > 0 ? ydpi : PT_DEFAULT_PPI;
 
+    /* #43: a job queued while the printer was off would be built from the stale
+     * 12 mm default and then faulted by the strict width guard against the live
+     * tape. This is the last point where the media can still be corrected: we hold
+     * the device and the page geometry does not exist yet. */
+    if (!pt_refresh_ready_media(job, device))
+        goto finish_png;   /* the job is already faulted */
+
     /* #40: the label is as long as the image is, not as long as the media
      * default. Do this before any decode work so an over-length job faults
      * cheaply and before a single byte reaches the device. */

@@ -19,6 +19,15 @@
  * it ejects (and cuts) a run that chained out to a job that never printed. */
 bool pt_chain_timer(pappl_system_t *system, void *cb_data);
 
+/* #43: make media-default describe the tape that is actually loaded, before the
+ * caller builds the page geometry from it. A no-op unless the printer is on our
+ * ptouch:// scheme and its media is suspect (never confirmed by a live read, or
+ * the printer is offline/media-empty), so healthy jobs pay nothing. Returns false
+ * when suspect media could not be resolved within the barrier's budget: the job
+ * has already been faulted and the caller must not print. Call it with the
+ * device open and owned by the job. */
+bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device);
+
 /* Fill driver_data for a P-touch printer (PAPPL pappl_pr_driver_cb_t). */
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name,
                   const char *device_uri, const char *device_id,
