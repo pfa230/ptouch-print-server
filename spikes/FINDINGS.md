@@ -1,5 +1,11 @@
 # M0 Spike Findings
 
+> **Historical spike log.** This records what was learned during the M0/M2 probes and is kept as-is.
+> Some conclusions here were later superseded by the shipped implementation - notably that chained
+> multi-label printing was "not achievable", which cross-job chaining (ADR-0008) solved, and the
+> open question about the production USB mapping, answered in ADR-0009. For current behaviour and
+> the reasoning behind it, see [`docs/adr/`](../docs/adr/README.md).
+
 Running log; each probe appends. Host: Unraid `dockerhost` (<host-ip>), PT-2730 `04f9:2041` on
 `/dev/bus/usb/<bus>/<dev>`. Spike image: `ptouch-spike` (Debian bookworm + PAPPL 1.4.11).
 
