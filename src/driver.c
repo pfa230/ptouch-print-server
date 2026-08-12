@@ -60,6 +60,39 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
     return papplDeviceWrite(device, buf, n) == (ssize_t)n;
 }
 
+/* The device may not have the 32-byte status reply ready on the first read, so
+ * poll a few times with a short delay, mirroring upstream ptouch_getstatus. Each
+ * read is itself bounded (300 ms) so the loop cannot hang: ~4 s worst case. */
+#define PT_STATUS_POLL_TRIES 10
+#define PT_STATUS_POLL_NS    100000000L   /* 0.1 s */
+
+/* One live status read. `st` is meaningful only when `parsed`; `n` is the raw
+ * read result, which separates an I/O error (< 0) from no answer at all (0). */
+typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
+
+/* Read the live tape from an already-open device: ESC @ + ESC i S, then poll for
+ * the reply. The caller owns the device and interprets the result; a supported
+ * tape is `parsed && st.tape_px > 0`. Callers must have checked that this is a
+ * ptouch:// device: pt_usb_read_status casts the device data to our libusb
+ * struct, so calling it on socket:// is undefined behaviour. */
+static pt_live_read pt_read_live_tape(pappl_device_t *device)
+{
+    uint8_t cmd[8];
+    pt_dev_write(device, cmd, pt_cmd_init(cmd));            /* ESC @ : reset the parser so the device answers */
+    pt_dev_write(device, cmd, pt_cmd_status_request(cmd));  /* ESC i S : status info request */
+    papplDeviceFlush(device);
+
+    uint8_t buf[32] = {0};
+    pt_live_read r = {0};
+    for (int tries = 0; r.n == 0 && tries < PT_STATUS_POLL_TRIES; tries++) {
+        struct timespec w = {0, PT_STATUS_POLL_NS};
+        nanosleep(&w, NULL);
+        r.n = pt_usb_read_status(device, buf, sizeof buf);
+    }
+    r.parsed = (r.n == 32 && pt_parse_status(buf, &r.st) == 0);
+    return r;
+}
+
 #define PT_MAX_LABELS    64
 #define PT_OPS_PER_LABEL 5
 #define PT_OPS_CAP       (PT_MAX_LABELS * PT_OPS_PER_LABEL)
@@ -294,26 +327,17 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     pappl_preason_t pr0 = papplPrinterGetReasons(printer);
     if (duri && !strncmp(duri, "ptouch://", 9) &&
         (pr0 & (PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY))) {
-        uint8_t sc[8];
-        pt_dev_write(d, sc, pt_cmd_init(sc));
-        pt_dev_write(d, sc, pt_cmd_status_request(sc));
-        papplDeviceFlush(d);
-        uint8_t sbuf[32] = {0};
-        ssize_t sn = 0;
-        for (int tries = 0; sn == 0 && tries < 10; tries++) {
-            struct timespec w = {0, 100000000};  /* 0.1 s */
-            nanosleep(&w, NULL);
-            sn = pt_usb_read_status(d, sbuf, sizeof sbuf);
-        }
-        if (sn == 32 && pt_parse_status(sbuf, &live) == 0 && live.tape_px > 0) {
+        pt_live_read lr = pt_read_live_tape(d);
+        if (lr.parsed && lr.st.tape_px > 0) {
             pappl_media_col_t mc;
-            if (media_col_for(live.tape_mm, 10000, dpi, &mc)) {
+            if (media_col_for(lr.st.tape_mm, 10000, dpi, &mc)) {
+                live = lr.st;
                 live_ok = true;
                 papplPrinterSetReadyMedia(printer, 1, &mc);
                 papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
                                        PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
             }
-        } else if (sn == 32 && pt_parse_status(sbuf, &live) == 0 && live.tape_mm == 0) {
+        } else if (lr.parsed && lr.st.tape_mm == 0) {
             papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
         }
     }
@@ -627,27 +651,11 @@ static bool status_cb(pappl_printer_t *printer)
         return true;
     }
 
-    uint8_t cmd[8];
-    size_t cn = pt_cmd_init(cmd);            /* ESC @ : reset parser so the device answers */
-    papplDeviceWrite(dev, cmd, cn);
-    size_t rn = pt_cmd_status_request(cmd);  /* ESC i S : status info request */
-    papplDeviceWrite(dev, cmd, rn);
-    papplDeviceFlush(dev);
-    /* The device may not have the 32-byte reply ready on the first read; poll a
-     * few times with a short delay, mirroring upstream ptouch_getstatus. Each
-     * read is itself bounded (2 s) so the loop cannot hang. */
-    uint8_t buf[32] = {0};
-    ssize_t n = 0;
-    for (int tries = 0; n == 0 && tries < 10; tries++) {
-        struct timespec w = {0, 100000000};  /* 0.1 s */
-        nanosleep(&w, NULL);
-        n = pt_usb_read_status(dev, buf, sizeof buf);
-    }
+    pt_live_read lr = pt_read_live_tape(dev);
     papplPrinterCloseDevice(printer);
 
-    pt_status st;
-    bool parsed = (n == 32 && pt_parse_status(buf, &st) == 0);
-    if (parsed && st.tape_px > 0) {
+    pt_status st = lr.st;
+    if (lr.parsed && st.tape_px > 0) {
         /* #41: a cassette swapped mid-chain must not inherit the flag - the tape at
          * the head is gone, so treat the run as finished (the next job pre-cuts). */
         pappl_pr_driver_data_t dd;
@@ -661,10 +669,10 @@ static bool status_cb(pappl_printer_t *printer)
                                    PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
         else
             papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
-    } else if (parsed && st.tape_mm == 0) {
+    } else if (lr.parsed && st.tape_mm == 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
         pt_chain_set(printer, false);   /* #41: no tape, nothing to finalize */
-    } else if (n < 0) {
+    } else if (lr.n < 0) {
         /* I/O error: device likely gone; OFFLINE, drop any stale MEDIA_EMPTY */
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
         pt_chain_set(printer, false);   /* #41 */
