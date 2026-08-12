@@ -140,12 +140,14 @@ static pt_cut_mode pt_env_cut_mode(pappl_printer_t *p)
  * idle timer runs on PAPPL's main loop while the raster callbacks run on a job
  * thread, so every access takes g_chain_lock. Entries are keyed by printer ID,
  * never by pappl_printer_t *: a stored pointer can dangle when the printer is
- * deleted, an ID cannot (papplSystemFindPrinter just returns NULL). */
+ * deleted, an ID cannot (papplSystemFindPrinter just returns NULL).
+ * The same table carries `media_confirmed` (#43), which needs exactly the same
+ * per-printer, cross-thread storage. */
 #define PT_CHAIN_MAX        8
 #define PT_CHAIN_IDLE_TICKS 3   /* ~3 s of quiet before the idle finaliser cuts */
 
 static pthread_mutex_t g_chain_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct { int printer_id; bool open; int idle_ticks; } g_chain[PT_CHAIN_MAX];
+static struct { int printer_id; bool open; int idle_ticks; bool media_confirmed; } g_chain[PT_CHAIN_MAX];
 
 /* Slot for this printer id, optionally allocating one. Call with the lock held. */
 static int pt_chain_slot(int id, bool create)
@@ -162,6 +164,7 @@ static int pt_chain_slot(int id, bool create)
     g_chain[free_slot].printer_id = id;
     g_chain[free_slot].open = false;
     g_chain[free_slot].idle_ticks = 0;
+    g_chain[free_slot].media_confirmed = false;
     return free_slot;
 }
 
@@ -193,6 +196,27 @@ static bool pt_chain_get(pappl_printer_t *printer)
     bool open = s >= 0 && g_chain[s].open;
     pthread_mutex_unlock(&g_chain_lock);
     return open;
+}
+
+/* #43: has a live status read ever confirmed the loaded tape for this printer?
+ * Until it has, media-default is still the safe 12 mm placeholder from
+ * pt_driver_cb, and any page built from it is a guess. */
+static void pt_set_media_confirmed(pappl_printer_t *printer, bool confirmed)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(papplPrinterGetID(printer), confirmed);
+    if (s >= 0)
+        g_chain[s].media_confirmed = confirmed;
+    pthread_mutex_unlock(&g_chain_lock);
+}
+
+static bool pt_media_confirmed(pappl_printer_t *printer)
+{
+    pthread_mutex_lock(&g_chain_lock);
+    int s = pt_chain_slot(papplPrinterGetID(printer), false);
+    bool confirmed = s >= 0 && g_chain[s].media_confirmed;
+    pthread_mutex_unlock(&g_chain_lock);
+    return confirmed;
 }
 
 static void pt_chain_drop(int id)
@@ -641,6 +665,7 @@ static bool status_cb(pappl_printer_t *printer)
         /* unplugged: OFFLINE only; drop any stale MEDIA_EMPTY from a prior poll */
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
         pt_chain_set(printer, false);   /* #41: the tape left with the device */
+        pt_set_media_confirmed(printer, false);  /* #43: a power-cycle must re-confirm */
         return true;
     }
 
@@ -664,22 +689,115 @@ static bool status_cb(pappl_printer_t *printer)
             pt_chain_set(printer, false);
         pappl_media_col_t mc;
         if (media_col_for(st.tape_mm, 10000, dt->dpi, &mc) &&
-            papplPrinterSetReadyMedia(printer, 1, &mc))
+            papplPrinterSetReadyMedia(printer, 1, &mc)) {
             papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
                                    PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
-        else
+            pt_set_media_confirmed(printer, true);   /* #43 */
+        } else {
             papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
+        }
     } else if (lr.parsed && st.tape_mm == 0) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
         pt_chain_set(printer, false);   /* #41: no tape, nothing to finalize */
+        pt_set_media_confirmed(printer, false);  /* #43 */
     } else if (lr.n < 0) {
         /* I/O error: device likely gone; OFFLINE, drop any stale MEDIA_EMPTY */
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
         pt_chain_set(printer, false);   /* #41 */
+        pt_set_media_confirmed(printer, false);  /* #43 */
     } else {  /* 0 / short / garbled: transient, keep last-known media */
         papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_OFFLINE);
     }
     return true;
+}
+
+/* #43 barrier budget. A printer that has just been switched on can take seconds
+ * to answer ESC i S even though its USB handle already opens, so one poll round
+ * is not enough. Each pt_read_live_tape is bounded at ~4 s, so the true ceiling
+ * is one in-flight attempt past the deadline (~14 s). One-time cost: only the
+ * first job after a start-while-off can hit it. */
+#define PT_MEDIA_REFRESH_MS 10000
+#define PT_MEDIA_RETRY_NS   500000000L   /* 0.5 s between attempts */
+
+static long pt_ms_since(const struct timespec *t0)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000 + (now.tv_nsec - t0->tv_nsec) / 1000000;
+}
+
+bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
+{
+    pappl_printer_t *printer = papplJobGetPrinter(job);
+    const char *duri = papplPrinterGetDeviceURI(printer);
+
+    /* pt_usb_read_status casts the device data to our libusb struct, so a
+     * socket:// sink must never reach it (the same gate as #38 and #40). */
+    if (!duri || strncmp(duri, "ptouch://", 9))
+        return true;
+    /* An open chain means the previous job left the tape at the head with the
+     * device still open. ESC @ there resets the printer mid-run ("Tape cassette
+     * changed!", #41), and the media cannot be stale anyway: it was just printed on. */
+    if (pt_chain_get(printer))
+        return true;
+    /* Only suspect media is worth the poll; a confirmed, online printer pays nothing. */
+    if (pt_media_confirmed(printer) &&
+        !(papplPrinterGetReasons(printer) & (PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY)))
+        return true;
+
+    pappl_pr_driver_data_t dd;
+    papplPrinterGetDriverData(printer, &dd);
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    const char *fail = "tape not readable yet";   /* reason if the barrier gives up */
+    for (;;) {
+        pt_live_read lr = pt_read_live_tape(device);
+        if (lr.parsed && lr.st.tape_px > 0) {
+            pappl_media_col_t mc;
+            if (media_col_for(lr.st.tape_mm, 10000, dd.x_default, &mc) &&
+                papplPrinterSetReadyMedia(printer, 1, &mc)) {
+                /* Only now is the state trustworthy: both the read and the publish
+                 * succeeded, so the reasons may be cleared. */
+                papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
+                                       PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
+                pt_set_media_confirmed(printer, true);
+                /* papplPrinterSetReadyMedia reaches media_default only when the ready
+                 * entry's source matches the default's ("main-roll" in both, from
+                 * media_col_for), and papplJobCreatePrintOptions builds the page from
+                 * media_default. Log what actually landed there so a future divergence
+                 * is visible instead of silently resurrecting this bug. */
+                papplPrinterGetDriverData(printer, &dd);
+                papplLogJob(job, PAPPL_LOGLEVEL_DEBUG,
+                            "#43 media refresh: default now %d centimm (tape %d mm)",
+                            dd.media_default.size_width, lr.st.tape_mm);
+                return true;
+            }
+            fail = "loaded tape is not supported";   /* re-reading returns the same width */
+            break;
+        }
+        if (lr.parsed && lr.st.tape_mm == 0) {       /* answered, cassette empty */
+            papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
+            pt_set_media_confirmed(printer, false);
+            fail = "no tape loaded";
+            break;
+        }
+        if (pt_ms_since(&t0) >= PT_MEDIA_REFRESH_MS)
+            break;
+        papplLogJob(job, PAPPL_LOGLEVEL_DEBUG,
+                    "#43 media refresh: no status after %ld ms, retrying", pt_ms_since(&t0));
+        struct timespec w = {0, PT_MEDIA_RETRY_NS};
+        nanosleep(&w, NULL);
+    }
+
+    /* Do NOT fall through and build the page: papplJobCreatePrintOptions would
+     * snapshot the stale default, and r_startjob's live read can then only fault the
+     * finished header, not repair it. Failing loudly beats printing wrong geometry. */
+    papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
+    papplJobSetMessage(job, "media refresh failed: %s", fail);
+    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "#43 media refresh failed after %ld ms: %s",
+                pt_ms_since(&t0), fail);
+    return false;
 }
 
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *device_uri,
