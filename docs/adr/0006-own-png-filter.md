@@ -33,6 +33,7 @@ which continues to drive the existing raster callbacks.
   silently eat both ends of the design.
 - **Orientation must be pinned from the image.** PAPPL auto-rotates by comparing the image aspect to
   the page aspect, which becomes circular once the page length is derived from the image. Real
-  clients send landscape labels; without pinning they print rotated and clipped.
+  clients send landscape labels; without pinning they print rotated and clipped. Landscape images
+  pin `reverse-landscape` (90° CW) so that the start of the design emerges first and prints upright (#44).
 - The private MIME type appears in `document-format-supported`.
 - Owning this filter later provided the only place able to fix media staleness (ADR-0007).

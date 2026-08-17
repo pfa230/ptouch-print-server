@@ -72,7 +72,7 @@ static int pt_label_length(int along_tape_px, int ppi)
 static bool pt_pin_orientation(pappl_pr_options_t *o, int width, int height)
 {
     if (o->orientation_requested == IPP_ORIENT_NONE)
-        o->orientation_requested = width > height ? IPP_ORIENT_LANDSCAPE : IPP_ORIENT_PORTRAIT;
+        o->orientation_requested = width > height ? IPP_ORIENT_REVERSE_LANDSCAPE : IPP_ORIENT_PORTRAIT;
 
     return o->orientation_requested == IPP_ORIENT_LANDSCAPE ||
            o->orientation_requested == IPP_ORIENT_REVERSE_LANDSCAPE;
