@@ -171,3 +171,31 @@ is cut free, any extra blank label/tape, and transfer result. Stop on failure
 and report the observation. Do not mark the hardware gate complete from stream
 counts, successful writes, or assumed physical results. Production driver changes
 depend on this gate passing.
+
+## Explicit-finishing candidate, three-copy USB test (2026-10-11)
+
+Candidate commit `b5fa376` ran in a temporary network-disabled container on
+`vault`, using only the PT-2730's USB node. The normal server had no jobs and was
+stopped for the test, then restored to running; the deployed binary/image was
+not replaced.
+
+A real IPP Print-Job requested `finishings=11` (trim) and three copies of a
+170x180-pixel generated PNG showing a framed X on user-confirmed 24 mm tape.
+The PNG filter resolved it to 180 rows per copy (25.40 mm), with the existing
+24 mm margins and printable window. PAPPL logged `finishings=0x4`, `copies=3`,
+and Completed with three impressions.
+
+Every page produced the same unsolicited status sequence: type 06/phase 01
+(printing), type 01/phase 01 (completed while still in printing phase), then
+type 06/phase 00 (receiving-ready). All reported error bits were zero. The driver
+consumed receiving-ready before sending the next copy. The first two ready
+notifications followed their page submissions by about 4.9 seconds each; the
+terminal copy took about 8.7 seconds. Earlier probes sent the next page
+immediately and their two-second USB writes failed during that page.
+
+This is a successful real-USB transfer/status result with a changed readiness
+boundary. Physical leader count, actual copy count/cuts, and measured lengths
+await the user's observation and cannot be inferred from Completed alone. The
+log is `/tmp/ptouch-finishing-hardware-20261011/trim-three-copies.log` on vault
+and in the same directory locally. Explicit none/trim runs, idle gaps, precut
+off, and hardware offline recovery remain open gates.

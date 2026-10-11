@@ -43,3 +43,8 @@ localhost IPP smoke query reported supported finishings none/trim and default
 none. These are software results, not certification of physical cuts or leaders.
 PT-2730 validation remains recorded separately in CUT-PROBE.md and the OpenSpec
 tasks, and integration waits for that gate.
+
+The real-USB candidate test on 2026-10-11 completed three trim copies with zero
+printer error bits and a receiving-ready notification consumed after each copy.
+Physical output observations and the remaining hardware matrix are pending; see
+CUT-PROBE.md.
