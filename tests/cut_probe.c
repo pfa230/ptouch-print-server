@@ -24,7 +24,7 @@ typedef struct {
 static void usage(const char *name)
 {
     fprintf(stderr,
-            "Usage: %s --capture FILE --sequence baseline|drain "
+            "Usage: %s --capture FILE --sequence baseline|drain|tail-eject "
             "--labels 1|3 --mode each|end --precut 0|1 --tape-mm N "
             "[--device ptouch://Brother/PT-2730|socket://HOST:PORT]\n"
             "Omitting --device only writes a capture; it never contacts a printer.\n",
@@ -93,10 +93,10 @@ static bool page(output *out, int index, int width)
     return true;
 }
 
-static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut, bool drain)
+static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut, int sequence)
 {
     pt_op ops[15];
-    int count = pt_plan_batch(labels, (uint8_t)tape, mode, precut, drain, ops, 15);
+    int count = pt_plan_batch(labels, (uint8_t)tape, mode, precut, sequence != 0, ops, 15);
     uint8_t bytes[8];
     if (count < 0 || !emit(out, bytes, pt_cmd_init(bytes)) ||
         !emit(out, bytes, pt_cmd_rasterstart(bytes, FLAG_NONE)))
@@ -108,7 +108,11 @@ static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut,
             case PT_OP_PRINTINFO: n = pt_cmd_printinfo(bytes, ops[i].arg); break;
             case PT_OP_SETMODE: n = pt_cmd_setmode(bytes, ops[i].arg); break;
             case PT_OP_SETADVANCED: n = pt_cmd_setadvanced(bytes, ops[i].arg); break;
-            case PT_OP_FF: n = pt_cmd_ff(bytes); break;
+            case PT_OP_FF:
+                /* Isolate the failed probe's empty second print command:
+                 * choose the last page's terminator after its raster, once. */
+                n = sequence == 2 && i == count - 1 ? pt_cmd_eject(bytes) : pt_cmd_ff(bytes);
+                break;
             case PT_OP_EJECT: n = pt_cmd_eject(bytes); break;
             case PT_OP_PRINT_PAGE:
                 if (!page(out, ops[i].page_index, pt_tape_px(tape)))
@@ -120,7 +124,7 @@ static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut,
             return false;
     }
     /* No sleep, reset, extra raster, or device close between final FF and EJECT. */
-    return !drain || emit(out, bytes, pt_cmd_eject(bytes));
+    return sequence != 1 || emit(out, bytes, pt_cmd_eject(bytes));
 }
 
 int main(int argc, char **argv)
@@ -146,6 +150,7 @@ int main(int argc, char **argv)
         else if (!strcmp(key, "--precut")) precut = number(value);
         else if (!strcmp(key, "--sequence") && !strcmp(value, "baseline")) drain = 0;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "drain")) drain = 1;
+        else if (!strcmp(key, "--sequence") && !strcmp(value, "tail-eject")) drain = 2;
         else if (!strcmp(key, "--mode") && !strcmp(value, "each")) mode = PT_CUT_EACH;
         else if (!strcmp(key, "--mode") && !strcmp(value, "end")) mode = PT_CUT_END;
         else {
@@ -181,7 +186,7 @@ int main(int argc, char **argv)
         }
     }
 #endif
-    bool ok = run(&out, labels, tape, mode, precut, drain != 0);
+    bool ok = run(&out, labels, tape, mode, precut, drain);
 #ifdef PT_PROBE_TRANSPORT
     if (out.device)
         papplDeviceClose(out.device);

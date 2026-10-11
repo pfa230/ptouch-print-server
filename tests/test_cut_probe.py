@@ -98,6 +98,21 @@ class CaptureTests(unittest.TestCase):
                                          [data for name, data in drain if name == "raster"])
                         self.assertEqual([name for name, _ in drain[-2:]], ["ff", "eject"])
 
+    def test_tail_eject_only_changes_final_terminator(self):
+        for labels in (1, 3):
+            for mode in ("each", "end"):
+                for precut in (0, 1):
+                    with self.subTest(labels=labels, mode=mode, precut=precut):
+                        drain = self.capture("drain", labels, mode, precut, tape=24)
+                        tail = self.capture("tail-eject", labels, mode, precut, tape=24)
+                        # Same continuation settings and pixels, but one final
+                        # print-with-feed instead of FF plus an empty-page eject.
+                        self.assertEqual(tail, drain[:-2] + [("eject", b"\x1a")])
+                        result = summary(tail)
+                        self.assertEqual(result["terminal_commands_after_pages"], [])
+                        self.assertEqual([p["finish"] for p in result["pages"]],
+                                         ["ff"] * (labels - 1) + ["eject"])
+
     def test_raster_payload_is_not_commands(self):
         payload = bytes([0x0C, 0x1A, 0x1B, 0x47]) * 4
         commands = decode(b"\x47\x10\x00" + payload + b"\x0c\x1a")
