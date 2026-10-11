@@ -113,6 +113,23 @@ class CaptureTests(unittest.TestCase):
                         self.assertEqual([p["finish"] for p in result["pages"]],
                                          ["ff"] * (labels - 1) + ["eject"])
 
+    def test_chain_off_after_raster_preserves_baseline_modes(self):
+        for labels in (1, 3):
+            for mode in ("each", "end"):
+                for precut in (0, 1):
+                    with self.subTest(labels=labels, mode=mode, precut=precut):
+                        baseline = self.capture("baseline", labels, mode, precut, tape=24)
+                        changed = self.capture("tail-chain-off", labels, mode, precut, tape=24)
+                        self.assertEqual([data for name, data in changed if name == "raster"],
+                                         [data for name, data in baseline if name == "raster"])
+                        self.assertEqual([data for name, data in changed if name == "mode"],
+                                         [data for name, data in baseline if name == "mode"])
+                        self.assertEqual([data[-1] for name, data in changed if name == "advanced"],
+                                         [0] * labels + [8])
+                        self.assertEqual([name for name, data in changed[-3:]],
+                                         ["raster", "advanced", "eject"])
+                        self.assertEqual(summary(changed)["terminal_commands_after_pages"], [])
+
     def test_raster_payload_is_not_commands(self):
         payload = bytes([0x0C, 0x1A, 0x1B, 0x47]) * 4
         commands = decode(b"\x47\x10\x00" + payload + b"\x0c\x1a")

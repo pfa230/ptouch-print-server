@@ -76,6 +76,8 @@ stopped, and the server was restored to running afterward.
 |----------|------|--------|--------|-------------------|----------------------|
 | baseline | each | 1 | 1 | 3,443 | User reported one leader and one printed rectangle. |
 | drain | each | 1 | 1 | 3,444 | User reported one leader only, with no printed rectangle. |
+| tail-eject | each | 1 | 1 | 3,443 | User corrected the initial report: one leader and two rectangles, with the second rectangle uncut. |
+| baseline | each | 1 | 3 | 3,630 before failure | Transfer failed during the second page; the paired tail-eject run did not start. |
 
 Both transfers succeeded. The baseline capture has 180 raster rows ending in
 EJECT; the drain capture has the same row count ending in FF then a separate
@@ -89,6 +91,29 @@ sequence is proven by this result. Baseline cut-free status and measured length
 are unconfirmed. Captures
 and transfer logs are in `/tmp/ptouch-cut-probe-results-20261011` on `vault`
 and `/tmp/ptouch-probe-check-20261011/hardware` locally.
+
+## Focused follow-up probes
+
+`--sequence tail-eject` replaces the last continuation FF with EJECT, without
+adding a second print command. It still leaves the last rectangle uncut according
+to the corrected physical observation. `--sequence tail-chain-off` preserves
+the baseline's autocut settings, starts the last page with advanced mode `00`,
+then sends advanced mode `08` immediately after its raster and before its only
+EJECT. This isolates whether the final chain setting can be selected after the
+raster; it is not yet physically verified. Neither variant adds raster rows or
+a sleep. The six capture tests verify the diagnostic byte changes and preserved
+fixture pixels and autocut settings.
+
+`--status-only` queries the PT-2730 through the existing device scheme, without
+initialization, raster, feeding, or cutting, and reports its raw status.
+
+Brother's [raster reference for newer models](https://download.brother.com/welcome/docp100407/cv_ptp900_eng_raster_102.pdf)
+describes FF and `1A` as page-ending print commands and specifies that advanced
+mode bit 3 controls terminal feeding/cutting. The PT-2730-compatible
+[ptouch-rs implementation](https://github.com/vowstar/ptouch-rs/blob/main/crates/ptouch-core/src/session.rs)
+uses actual blank raster when implementing a standalone feed/cut. These are
+evidence for the diagnostic changes, not proof of PT-2730 behavior. A failed
+physical gate blocks production changes while investigation continues.
 
 ## Hardware gate
 

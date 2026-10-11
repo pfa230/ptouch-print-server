@@ -8,6 +8,7 @@
 #include "cutter.h"
 #include "protocol.h"
 #include "raster.h"
+#include "status.h"
 #include "tables.h"
 #ifdef PT_PROBE_TRANSPORT
 #include "device_usb.h"
@@ -24,10 +25,11 @@ typedef struct {
 static void usage(const char *name)
 {
     fprintf(stderr,
-            "Usage: %s --capture FILE --sequence baseline|drain|tail-eject "
+            "Usage: %s --capture FILE --sequence baseline|drain|tail-eject|tail-chain-off "
             "--labels 1|3 --mode each|end --precut 0|1 --tape-mm N "
             "[--device ptouch://Brother/PT-2730|socket://HOST:PORT]\n"
-            "Omitting --device only writes a capture; it never contacts a printer.\n",
+            "Omitting --device only writes a capture; it never contacts a printer.\n"
+            "Use --status-only to query the PT-2730 without initialization or printing.\n",
             name);
 }
 
@@ -96,7 +98,8 @@ static bool page(output *out, int index, int width)
 static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut, int sequence)
 {
     pt_op ops[15];
-    int count = pt_plan_batch(labels, (uint8_t)tape, mode, precut, sequence != 0, ops, 15);
+    int count = pt_plan_batch(labels, (uint8_t)tape, mode, precut,
+                              sequence == 1 || sequence == 2, ops, 15);
     uint8_t bytes[8];
     if (count < 0 || !emit(out, bytes, pt_cmd_init(bytes)) ||
         !emit(out, bytes, pt_cmd_rasterstart(bytes, FLAG_NONE)))
@@ -107,13 +110,20 @@ static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut,
         switch (ops[i].kind) {
             case PT_OP_PRINTINFO: n = pt_cmd_printinfo(bytes, ops[i].arg); break;
             case PT_OP_SETMODE: n = pt_cmd_setmode(bytes, ops[i].arg); break;
-            case PT_OP_SETADVANCED: n = pt_cmd_setadvanced(bytes, ops[i].arg); break;
+            case PT_OP_SETADVANCED:
+                n = pt_cmd_setadvanced(bytes, sequence == 3 && ops[i].page_index == labels - 1
+                                             ? 0 : ops[i].arg);
+                break;
             case PT_OP_FF:
                 /* Isolate the failed probe's empty second print command:
                  * choose the last page's terminator after its raster, once. */
                 n = sequence == 2 && i == count - 1 ? pt_cmd_eject(bytes) : pt_cmd_ff(bytes);
                 break;
-            case PT_OP_EJECT: n = pt_cmd_eject(bytes); break;
+            case PT_OP_EJECT:
+                if (sequence == 3 && !emit(out, bytes, pt_cmd_setadvanced(bytes, 8)))
+                    return false;
+                n = pt_cmd_eject(bytes);
+                break;
             case PT_OP_PRINT_PAGE:
                 if (!page(out, ops[i].page_index, pt_tape_px(tape)))
                     return false;
@@ -127,8 +137,47 @@ static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut,
     return sequence != 1 || emit(out, bytes, pt_cmd_eject(bytes));
 }
 
+#ifdef PT_PROBE_TRANSPORT
+static int status_only(void)
+{
+    output out = {0};
+    uint8_t command[3], response[32];
+    pt_usb_register();
+    out.capture = tmpfile();
+    if (!out.capture)
+        return 1;
+    out.device = papplDeviceOpen("ptouch://Brother/PT-2730", "cut-probe-status", report_error, NULL);
+    bool ok = out.device && emit(&out, command, pt_cmd_status_request(command));
+    size_t received = 0;
+    for (int i = 0; ok && i < 20 && received < sizeof response; i++) {
+        ssize_t n = pt_usb_read_status(out.device, response + received, sizeof response - received);
+        if (n < 0) ok = false;
+        else received += (size_t)n;
+    }
+    pt_status status;
+    ok = ok && received == sizeof response && pt_parse_status(response, &status) == 0;
+    if (ok) {
+        fprintf(stderr, "probe: status error=0x%04x tape=%dmm type=0x%02x phase=0x%02x raw=",
+                status.error, status.tape_mm, response[18], response[19]);
+        for (size_t i = 0; i < sizeof response; i++) fprintf(stderr, "%02x", response[i]);
+        fputc('\n', stderr);
+    } else fprintf(stderr, "probe: status query failed (%zu bytes)\n", received);
+    if (out.device) papplDeviceClose(out.device);
+    fclose(out.capture);
+    return ok && status.error == 0 ? 0 : 1;
+}
+#endif
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--status-only")) {
+#ifdef PT_PROBE_TRANSPORT
+        return status_only();
+#else
+        fprintf(stderr, "probe: status query requires a PAPPL/libusb build\n");
+        return 2;
+#endif
+    }
     const char *capture = NULL, *uri = NULL;
     int labels = -1, tape = -1, precut = -1;
     pt_cut_mode mode = PT_CUT_NONE;
@@ -151,6 +200,7 @@ int main(int argc, char **argv)
         else if (!strcmp(key, "--sequence") && !strcmp(value, "baseline")) drain = 0;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "drain")) drain = 1;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "tail-eject")) drain = 2;
+        else if (!strcmp(key, "--sequence") && !strcmp(value, "tail-chain-off")) drain = 3;
         else if (!strcmp(key, "--mode") && !strcmp(value, "each")) mode = PT_CUT_EACH;
         else if (!strcmp(key, "--mode") && !strcmp(value, "end")) mode = PT_CUT_END;
         else {
