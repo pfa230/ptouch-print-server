@@ -78,6 +78,8 @@ stopped, and the server was restored to running afterward.
 | drain | each | 1 | 1 | 3,444 | User reported one leader only, with no printed rectangle. |
 | tail-eject | each | 1 | 1 | 3,443 | User corrected the initial report: one leader and two rectangles, with the second rectangle uncut. |
 | baseline | each | 1 | 3 | 3,630 before failure | Transfer failed during the second page; the paired tail-eject run did not start. |
+| tail-chain-off | each | 1 | 1 | 3,447 | User reported one leader, one rectangle cut free, and nothing more. |
+| tail-chain-off | each | 1 | 3 | 3,630 before failure | Transfer failed during the second page at the same byte count as baseline; physical output pending. |
 
 Both transfers succeeded. The baseline capture has 180 raster rows ending in
 EJECT; the drain capture has the same row count ending in FF then a separate
@@ -100,12 +102,22 @@ to the corrected physical observation. `--sequence tail-chain-off` preserves
 the baseline's autocut settings, starts the last page with advanced mode `00`,
 then sends advanced mode `08` immediately after its raster and before its only
 EJECT. This isolates whether the final chain setting can be selected after the
-raster; it is not yet physically verified. Neither variant adds raster rows or
+raster; its single-label default case physically cut the rectangle free, but
+its three-label case failed transferring page two. Neither variant adds raster rows or
 a sleep. The six capture tests verify the diagnostic byte changes and preserved
 fixture pixels and autocut settings.
 
 `--status-only` queries the PT-2730 through the existing device scheme, without
 initialization, raster, feeding, or cutting, and reports its raw status.
+
+`--wait-ready 1` adds a diagnostic USB receive step after each page terminator,
+including the final one. It drains old statuses before initialization and logs
+unsolicited 32-byte packets, stopping on a reported error or missing completion.
+It sends no status requests while printing and changes no captured print bytes.
+The receive loop is bounded to 70 reads with the existing 300 ms read timeout.
+This tests whether the repeatable second-page transfer failure follows sending
+new commands while the printer is still busy; that cause is not yet proven.
+The seven capture tests and five core CTest tests pass with this probe addition.
 
 Brother's [raster reference for newer models](https://download.brother.com/welcome/docp100407/cv_ptp900_eng_raster_102.pdf)
 describes FF and `1A` as page-ending print commands and specifies that advanced

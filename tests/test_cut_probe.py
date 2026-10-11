@@ -58,12 +58,12 @@ def summary(commands):
 
 
 class CaptureTests(unittest.TestCase):
-    def capture(self, sequence, labels, mode, precut, tape=12):
+    def capture(self, sequence, labels, mode, precut, tape=12, extra=()):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "capture.prn"
             args = [PROBE, "--capture", str(path), "--sequence", sequence,
                     "--labels", str(labels), "--mode", mode, "--precut", str(precut),
-                    "--tape-mm", str(tape)]
+                    "--tape-mm", str(tape), *extra]
             subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             return decode(path.read_bytes())
 
@@ -134,6 +134,11 @@ class CaptureTests(unittest.TestCase):
         payload = bytes([0x0C, 0x1A, 0x1B, 0x47]) * 4
         commands = decode(b"\x47\x10\x00" + payload + b"\x0c\x1a")
         self.assertEqual([name for name, _ in commands], ["raster", "ff", "eject"])
+
+    def test_readiness_wait_does_not_add_print_commands(self):
+        baseline = self.capture("tail-chain-off", 3, "each", 1, tape=24)
+        self.assertEqual(self.capture("tail-chain-off", 3, "each", 1, tape=24,
+                                     extra=("--wait-ready", "1")), baseline)
 
     def test_truncated_capture_rejected(self):
         for data in (b"\x47", b"\x47\x10\x00\x0c\x1a", b"\x1biK"):
