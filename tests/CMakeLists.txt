@@ -17,3 +17,12 @@ add_test(NAME status COMMAND test_status)
 add_executable(test_cutter test_cutter.c)
 target_link_libraries(test_cutter ptcore)
 add_test(NAME cutter COMMAND test_cutter)
+
+# Test-only command-sequence probe; capture generation needs only the core.
+add_executable(ptouch-cut-probe cut_probe.c)
+target_link_libraries(ptouch-cut-probe PRIVATE ptcore)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME cut_probe_capture COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_probe.py $<TARGET_FILE:ptouch-cut-probe>)
+endif()
