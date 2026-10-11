@@ -59,6 +59,11 @@ probe does not claim to fix it.
   its capture: 12,369 bytes for baseline, 12,370 for drain. Every checked
   transfer succeeded. Drain ended with FF followed by a separate EJECT.
 - Strict OpenSpec validation passed. Physical results are still pending.
+- After approval, the probe was staged at `/tmp/ptouch-cut-probe-20261011`
+  on `vault`; its help command ran successfully in the deployed runtime image
+  with no USB access. The hardware preflight found no Brother (`04f9`) USB
+  device in `vault`'s sysfs, and the server logged repeated device-open failures.
+  No physical comparison could run; the hardware gate remains open.
 
 ## Hardware gate
 
