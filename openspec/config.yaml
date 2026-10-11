@@ -1,0 +1,19 @@
+schema: spec-driven
+
+context: |
+  Read README.md and docs/adr/README.md for current behavior and design decisions;
+  spikes/FINDINGS.md is historical and some conclusions have been superseded.
+  Only the Brother PT-2730 is hardware-certified. Other recognized USB models
+  must not be described as print-supported without protocol work and validation.
+  Preserve 1:1 printing, nominal tape widths with real imageable margins, strict
+  width rejection, offline recovery, and cross-job chaining unless the change
+  explicitly revises those contracts.
+  Hardware validation requires a real printer; distinguish it from core tests
+  and socket-based IPP checks when reporting results.
+
+operations:
+  apply:
+    guidance:
+      - For C changes, run cmake -S . -B build, cmake --build build, and ctest --test-dir build --output-on-failure.
+      - For driver, USB, or PNG filter changes, also validate the adapter in the container; core tests do not exercise it.
+      - For documentation and workflow configuration changes, review the diff and validate OpenSpec configuration without running application tests.

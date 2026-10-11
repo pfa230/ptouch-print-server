@@ -216,6 +216,28 @@ application, why the USB scheme is custom, why media is advertised at nominal ta
 width, why the app owns the PNG filter, how offline and job chaining work, and why
 the licence is GPL-3.0.
 
+## OpenSpec workflow
+
+[OpenSpec](https://openspec.dev/docs/setup) tracks proposed changes in
+`openspec/changes/` and accepted specifications in `openspec/specs/`. Project
+constraints live in `openspec/config.yaml`; the existing ADRs remain the record
+of design decisions.
+
+The repository includes six Codex skills in `.agents/skills/`. Start a new Codex
+session after setup to load them:
+
+- `$openspec-explore` to investigate an idea.
+- `$openspec-propose "describe the change"` to draft its proposal, design,
+  specification updates, and tasks.
+- `$openspec-update-change` to revise the plan.
+- `$openspec-apply-change` to implement the planned tasks.
+- `$openspec-sync-specs` to sync specification updates.
+- `$openspec-archive-change` to archive a completed change.
+
+The [OpenSpec CLI](https://openspec.dev/docs/cli) must be installed. Run
+`openspec list` to see active changes, `openspec validate --all --strict` to check
+specifications and changes, and `openspec update` to refresh the generated skills.
+
 ## Licensing
 
 This project is licensed under the **GNU General Public License v3.0 only**
