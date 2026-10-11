@@ -88,8 +88,8 @@ are advanced mode `08` versus `00`, and the drain's additional FF before EJECT.
 Successful USB transfer did not establish successful printing. The proposed
 immediate finalization sequence failed this physical comparison, so testing
 stopped before the remaining matrix cases and before production driver changes.
-The cause is not established; neither a timing delay nor a different terminal
-sequence is proven by this result. Baseline cut-free status and measured length
+The original separate-finalization mechanism failed; subsequent diagnostic
+evidence is recorded below. Baseline cut-free status and measured length
 are unconfirmed. Captures
 and transfer logs are in `/tmp/ptouch-cut-probe-results-20261011` on `vault`
 and `/tmp/ptouch-probe-check-20261011/hardware` locally.
@@ -115,6 +115,13 @@ including the final one. It drains old statuses before initialization and logs
 unsolicited 32-byte packets, stopping on a reported error or missing completion.
 It sends no status requests while printing and changes no captured print bytes.
 The receive loop is bounded to 70 reads with the existing 300 ms read timeout.
+Only receiving-ready (type 06, phase 00, zero phase number) ends the wait.
+An initial variant accepted type 01 (print-completed) too early: page one
+produced printing then completed-with-printing-phase, and page two consumed
+the preceding page's ready packet. That run transferred 7,751 bytes before
+failing during page three. The corrected receiving-ready predicate awaits
+physical verification. The production design now uses explicit job finishings
+instead of the superseded queue-drain finalization mechanism.
 This tests whether the repeatable second-page transfer failure follows sending
 new commands while the printer is still busy; that cause is not yet proven.
 The seven capture tests and five core CTest tests pass with this probe addition.

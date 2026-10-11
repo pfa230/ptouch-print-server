@@ -77,8 +77,10 @@ static bool read_ready(output *out, bool wait, int page_index)
         for (size_t i = 0; i < sizeof packet; i++) fprintf(stderr, "%02x", packet[i]);
         fputc('\n', stderr);
         if (status.error) return false;
-        if (wait && (packet[18] == 1 || (packet[18] == 6 && packet[19] == 0 &&
-                                        packet[20] == 0 && packet[21] == 0))) return true;
+        /* Completion (type 01) precedes receiving-ready on this PT-2730.
+         * Consuming only completion leaves the old ready event for page two. */
+        if (wait && packet[18] == 6 && packet[19] == 0 &&
+            packet[20] == 0 && packet[21] == 0) return true;
         used = 0;
     }
     fprintf(stderr, "probe: no completion status after page %d; stopping\n", page_index + 1);

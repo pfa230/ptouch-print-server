@@ -1,87 +1,71 @@
-# Queue-run printing
+# Client-controlled label finishing
 
 ## Purpose
 
-Print consecutive runnable jobs as one tape run and finalize when the queue drains. Client batch boundaries do not determine the run boundary; the server makes that decision after the current job's pages are submitted.
+Let clients choose cutting for each label job through the printer's advertised finishing option, allowing explicit continuation without timing-based batch inference.
 
 ## ADDED Requirements
 
-### Requirement: Continuation across queued jobs
+### Requirement: Job finishing controls cutting
 
-For valid jobs on a healthy printer with matching tape, the server SHALL continue the tape run when another runnable job is queued at the current job's completion check. Under `PTOUCH_CUT_MODE=each` and `PTOUCH_PRECUT=1`, the run SHALL have one leader and labels cut apart. Client batch boundaries SHALL NOT force finalization.
+The server SHALL use the job's resolved finishing option as its cut policy. `none` SHALL disable all cuts and leave the tape run open. `trim` SHALL cut the job's labels individually and finalize its last label. Queue contents and legacy cut-mode environment settings SHALL NOT override this choice.
 
-#### Scenario: Follower arrives during printing
-- **WHEN** a valid follower becomes runnable after the current label starts but before the current job's completion check
-- **THEN** the jobs print in the same run without an intervening terminal eject or printer reset
+#### Scenario: Explicit no-cut job
+- **WHEN** a valid job requests finishings none
+- **THEN** it prints without precut, intermediate cuts, or terminal cutting, even if the queue becomes empty
 
-#### Scenario: Different client batches are queued
-- **WHEN** jobs from different client batches remain runnable at successive completion checks
-- **THEN** they share a continuous run in the printer queue's existing processing order
+#### Scenario: Explicit trim job
+- **WHEN** a valid job requests finishings trim
+- **THEN** it cuts and finalizes its labels, even if another job is queued
 
-### Requirement: Immediate finalization on queue drain
+#### Scenario: Finishings collection
+- **WHEN** a job selects a supported none or trim finishing-template through finishings-col
+- **THEN** it behaves like the corresponding finishings enum selection
 
-When a cutting-enabled job completes successfully with no other runnable job at its completion check, the server SHALL finalize the run while the finishing job still owns the device. Successful normal completion SHALL NOT wait for an idle grace period or timer. Held, incomplete, canceled, and stopped jobs SHALL NOT postpone this decision.
+### Requirement: Advertised defaults are honored
 
-#### Scenario: Single label with empty queue
-- **WHEN** one label finishes and no other job is runnable
-- **THEN** its run is finalized immediately without an extra blank label or duplicate successful terminal eject
+A job that omits its finishing selection SHALL use the printer's advertised finishing default. The server SHALL NOT substitute a hidden environment or queue-based cut policy.
 
-#### Scenario: Final job in a queue run
-- **WHEN** the last runnable job finishes
-- **THEN** the run is finalized once after its last label, with the final label's intended length preserved
+#### Scenario: No finishing option with none default
+- **WHEN** the client omits finishings and the advertised default is none
+- **THEN** the job prints without cutting
 
-#### Scenario: Only held or uploading work remains
-- **WHEN** the finishing job's completion check finds only held or incomplete jobs
-- **THEN** it finalizes the current run
+### Requirement: Explicit continuation survives idle time
 
-### Requirement: Defined late-arrival boundary
+On a healthy matching-tape printer, the server SHALL preserve an unfinished run across subsequent jobs without resetting it or cutting due to elapsed idle time. A later trim job SHALL finalize its own final label using its explicit policy. No label content SHALL be resent during cleanup.
 
-A job becoming runnable after the completion-time queue check SHALL be permitted to start a new tape run and incur its own leader. The server SHALL NOT delay normal finalization to predict future submissions or guarantee one leader for a client batch separated by empty-queue completion checks.
+#### Scenario: Idle gap between jobs
+- **WHEN** a no-cut job completes and another valid job arrives after an idle gap
+- **THEN** the open run is preserved without an automatic cut or printer reset between jobs
 
-#### Scenario: Follower arrives after the check
-- **WHEN** a new job becomes runnable after the previous job decided to finalize its empty queue
-- **THEN** the new job starts a new run after that finalization
+#### Scenario: Terminal trim job
+- **WHEN** one or more no-cut jobs are followed by a trim job
+- **THEN** the server continues the existing run and finishes the trim job with a terminal cut without an extra blank label
 
-### Requirement: Existing printing compatibility
+#### Scenario: Missing terminal job
+- **WHEN** a terminal job is never submitted, canceled, or rejected before printing
+- **THEN** idle cleanup does not cut the preceding no-cut run
 
-The server SHALL retain existing advertised document formats, PNG geometry and copy limits, strict tape-width rejection, and offline queueing. Clients SHALL NOT need a new batch document or capability handshake. Normal `none` completion SHALL NOT gain a terminal cut. With precut disabled, the change SHALL NOT introduce a leader cut. Existing cut policies, including the known `end` plus precut limitation, SHALL remain documented.
+### Requirement: Failure does not override the finishing choice
 
-#### Scenario: PNG copies followed by another job
-- **WHEN** one PNG requests multiple supported copies and a valid follower is runnable at completion
-- **THEN** all requested copies print before the follower and the run stays open between jobs
+A detected output or printer-status failure SHALL fail the job without replaying its content or inventing a terminal cut. Successful finalization SHALL only be recorded after the requested terminal command is transferred. If continuation state cannot be retained, a no-cut job SHALL fail before printing rather than cut implicitly.
 
-#### Scenario: No-cut mode
-- **WHEN** jobs complete normally with `PTOUCH_CUT_MODE=none`
-- **THEN** queue drain does not introduce an automatic terminal cut
-
-#### Scenario: Precut disabled
-- **WHEN** a single label or multiple copies print with `PTOUCH_CUT_MODE=each` and `PTOUCH_PRECUT=0`
-- **THEN** the revised continuation and finalization sequence does not introduce a leader cut
-
-#### Scenario: Jobs queued while offline
-- **WHEN** accepted PNG jobs wait for the printer to return with matching tape
-- **THEN** existing media confirmation and strict geometry checks still apply and runnable jobs share a queue run
-
-### Requirement: Stranded-run cleanup
-
-If the selected follower never prints, the server SHALL retain best-effort cleanup of the open run once no runnable or processing job remains. Cleanup SHALL NOT interleave terminal output with a printing job, and SHALL NOT emit another terminal eject for a run already finalized successfully.
-
-#### Scenario: Follower canceled before startup
-- **WHEN** a run was left open for a queued follower that is then canceled and no other job remains runnable
-- **THEN** fallback cleanup attempts to detach the printed tape without depending on that canceled job printing
-
-#### Scenario: Follower fails validation
-- **WHEN** the queued follower fails before its driver callbacks start and no other job remains runnable
-- **THEN** fallback cleanup attempts to finalize the stranded run
-
-### Requirement: Detected output failure
-
-A detected raster or terminal-command transfer failure SHALL prevent the current job from reporting successful completion. The server SHALL only record successful finalization after the terminal transfer succeeds. Failed cleanup SHALL remain eligible for best-effort recovery without automatically reprinting label content.
+#### Scenario: No-cut job canceled during printing
+- **WHEN** a no-cut job is canceled after printing starts
+- **THEN** cleanup does not introduce a terminal cut
 
 #### Scenario: Terminal transfer fails
-- **WHEN** the terminal eject cannot be transferred
-- **THEN** the job reports failure and the server does not record the run as successfully closed
+- **WHEN** the requested terminal cut cannot be transferred
+- **THEN** the job reports failure and repeated cleanup does not resend the terminal command or label content
 
-#### Scenario: Abort cleanup repeats a callback
-- **WHEN** abort handling repeats end-of-job cleanup after an output failure
-- **THEN** no label content is resent and an already successful finalization is not repeated
+### Requirement: Existing rendering is preserved
+
+The server SHALL retain advertised document formats, 1:1 PNG geometry, strict tape-width rejection, supported copy limits, and offline media recovery. The finishing choice SHALL NOT change rendered pixels or dimensions. Physical printing and cutting SHALL be verified on the PT-2730 before claiming the leader issue fixed.
+
+#### Scenario: Copies
+- **WHEN** a valid PNG requests supported copies
+- **THEN** all requested copies use the same finishing policy and existing image geometry
+
+#### Scenario: Offline printer returns
+- **WHEN** queued jobs resume after a printer returns with matching tape
+- **THEN** media is confirmed through the existing recovery path and each job retains its requested finishing choice
