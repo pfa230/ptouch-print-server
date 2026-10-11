@@ -290,9 +290,14 @@ int main(void)
     usb_present = false; pt_chain_set(usb, true); assert(status_cb(usb));
     assert(!pt_chain_get(usb) && !pt_media_confirmed(usb));
     assert(papplPrinterGetReasons(usb) & PAPPL_PREASON_OFFLINE);
-    usb_present = true; ready_status(0, 32); statuses[10] = 24; status_size = 32;
+    usb_present = true; ready_status(0, 32);
+    /* A stale notification with the old width precedes the requested snapshot. */
+    statuses[19] = 0;
+    statuses[32 + 10] = 24; statuses[32 + 18] = statuses[32 + 19] = 0;
+    status_size = 64;
     reset_wire(); j = job(usb, "none", 1, false);
     assert(pt_refresh_ready_media(j, d));
+    assert(status_used == 64);
     pappl_pr_driver_data_t dd; papplPrinterGetDriverData(usb, &dd);
     assert(dd.media_default.size_width == 2400 && pt_media_confirmed(usb));
     o = papplJobCreatePrintOptions(j, 1, false); assert(o->header.cupsWidth == 170);

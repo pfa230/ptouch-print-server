@@ -25,7 +25,8 @@ Verified scenarios:
 - detected printer error, malformed status, and cancellation fail readiness;
 - state exhaustion refuses a no-cut job before output;
 - USB disappearance clears stale run/media state, and the existing refresh path
-  confirms 24 mm tape before creating the next page's nominal-width geometry;
+  consumes an old phase notification, then confirms 24 mm from the requested
+  snapshot before creating the next page's nominal-width geometry;
 - strict width mismatch and unsupported raw raster input remain rejected.
 
 Run in the deploy build stage, which provides PAPPL/libusb/libpng:

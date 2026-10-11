@@ -83,18 +83,30 @@ typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
 static pt_live_read pt_read_live_tape(pappl_device_t *device)
 {
     uint8_t cmd[8];
-    pt_dev_write(device, cmd, pt_cmd_init(cmd));            /* ESC @ : reset the parser so the device answers */
-    pt_dev_write(device, cmd, pt_cmd_status_request(cmd));  /* ESC i S : status info request */
-    papplDeviceFlush(device);
+    pt_live_read r = {0};
+    if (!pt_dev_write(device, cmd, pt_cmd_init(cmd)) ||
+        !pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
+        r.n = -1;
+        return r;
+    }
 
     uint8_t buf[32] = {0};
-    pt_live_read r = {0};
-    for (int tries = 0; r.n == 0 && tries < PT_STATUS_POLL_TRIES; tries++) {
+    size_t used = 0;
+    for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
         struct timespec w = {0, PT_STATUS_POLL_NS};
         nanosleep(&w, NULL);
-        r.n = pt_usb_read_status(device, buf, sizeof buf);
+        ssize_t n = pt_usb_read_status(device, buf + used, sizeof buf - used);
+        if (n < 0) { r.n = n; break; }
+        used += (size_t)n;
+        r.n = (ssize_t)used;
+        if (used < sizeof buf) continue;
+        /* Earlier page notifications may precede our requested snapshot.
+         * Consume them so they cannot satisfy the next page's readiness wait. */
+        r.parsed = buf[18] == 0 && pt_parse_status(buf, &r.st) == 0;
+        if (r.parsed) break;
+        used = 0;
+        r.n = 0;
     }
-    r.parsed = (r.n == 32 && pt_parse_status(buf, &r.st) == 0);
     return r;
 }
 

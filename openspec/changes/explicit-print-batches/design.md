@@ -32,7 +32,7 @@ Skip ESC @ on subsequent jobs while that state is open, even when PAPPL closed a
 
 Use transferred-byte metrics around write and flush, following the existing smoke probe, so buffered acceptance cannot report a successful print or cut. Return failure through raster callbacks on detected transfer errors.
 
-On the custom USB transport, after a page terminator consume unsolicited status until the printer reports receiving-ready (type 06, phase 00, zero phase number), with a bounded deadline and error/cancellation handling. Print-completed (type 01) alone does not establish readiness. Do not send a status request or a new page while waiting. Socket-based tests skip USB reads and use deterministic media/status fixtures. This is printer flow control, not a batching delay or cut decision.
+On the custom USB transport, after a page terminator consume unsolicited status until the printer reports receiving-ready (type 06, phase 00, zero phase number), with a bounded deadline and error/cancellation handling. Print-completed (type 01) alone does not establish readiness. Initial media queries consume earlier notifications until their requested type-00 snapshot so those packets cannot satisfy a later page wait. Do not send a status request or a new page while waiting. Socket-based tests skip USB reads and use deterministic media/status fixtures. This is printer flow control, not a batching delay or cut decision.
 
 ## Risks / Trade-offs
 
