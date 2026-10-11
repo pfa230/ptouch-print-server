@@ -58,12 +58,37 @@ probe does not claim to fix it.
   precut-on variant used one connection. The received stream exactly matched
   its capture: 12,369 bytes for baseline, 12,370 for drain. Every checked
   transfer succeeded. Drain ended with FF followed by a separate EJECT.
-- Strict OpenSpec validation passed. Physical results are still pending.
+- Strict OpenSpec validation passed. The physical gate has not passed.
 - After approval, the probe was staged at `/tmp/ptouch-cut-probe-20261011`
   on `vault`; its help command ran successfully in the deployed runtime image
   with no USB access. The hardware preflight found no Brother (`04f9`) USB
   device in `vault`'s sysfs, and the server logged repeated device-open failures.
   No physical comparison could run; the hardware gate remains open.
+
+## Failed hardware gate (2026-10-11)
+
+The user confirmed 24 mm tape and readiness to inspect the PT-2730 output.
+The printer subsequently enumerated on `vault` as USB `04f9:2041`; all existing
+jobs were completed before testing. Each probe ran with the normal server
+stopped, and the server was restored to running afterward.
+
+| Sequence | Mode | Precut | Labels | Checked USB bytes | Physical observation |
+|----------|------|--------|--------|-------------------|----------------------|
+| baseline | each | 1 | 1 | 3,443 | User reported one leader and one printed rectangle. |
+| drain | each | 1 | 1 | 3,444 | User reported one leader only, with no printed rectangle. |
+
+Both transfers succeeded. The baseline capture has 180 raster rows ending in
+EJECT; the drain capture has the same row count ending in FF then a separate
+EJECT. The raster payloads are byte-for-byte identical; the command differences
+are advanced mode `08` versus `00`, and the drain's additional FF before EJECT.
+Successful USB transfer did not establish successful printing. The proposed
+immediate finalization sequence failed this physical comparison, so testing
+stopped before the remaining matrix cases and before production driver changes.
+The cause is not established; neither a timing delay nor a different terminal
+sequence is proven by this result. Baseline cut-free status and measured length
+are unconfirmed. Captures
+and transfer logs are in `/tmp/ptouch-cut-probe-results-20261011` on `vault`
+and `/tmp/ptouch-probe-check-20261011/hardware` locally.
 
 ## Hardware gate
 

@@ -5,6 +5,8 @@
 - [x] 1.1 Add a small test-only probe using existing command builders and the custom device scheme: initialize/rasterstart, emit `pt_plan_batch(..., chain_out=true)` with known raster fixtures, then send `pt_cmd_eject` immediately after the final FF on the same open ptouch handle. Include the current `chain_out=false` terminal plan as baseline; verify captures distinguish commands from raster and document exact sequences and transfer checks without changing production callbacks.
 - [ ] 1.2 When hardware testing is authorized, compare those sequences on the PT-2730 for single/multiple labels, `each` with precut on/off and `end` with precut off; record leaders, label separation, final-label length, the final label actually cut free, and absence of an extra blank label. Explicitly verify `each` precut=0 introduces no leader cut despite its changed final-label autocut commands. Stop and revise on failure before production driver changes; socket output cannot complete this gate.
 
+Hardware gate failed on 2026-10-11: the single-label drain probe produced only a leader, while the baseline printed its rectangle. Task 1.2 remains incomplete; production tasks are paused pending an agreed revision. See `design.md` and `tests/CUT-PROBE.md`.
+
 ## 2. Minimal driver change and local checks
 
 - [ ] 2.1 Introduce checked write-and-flush handling on print/eject paths using the existing smoke probe's transferred-byte metric pattern; verify injected raster/FF/EJECT failures return failure and buffered acceptance alone cannot mark a run finalized.

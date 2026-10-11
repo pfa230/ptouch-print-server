@@ -13,7 +13,13 @@ Verified in local source:
 - The existing timer finalizes stranded runs. It is cleanup machinery, not a necessary delay for successful queue draining.
 - PAPPL's buffered write return does not prove transfer, and its flush discards errors. `run_smoke` already checks actual transferred bytes using `papplDeviceGetMetrics`.
 
-The October 10 deployment logs showed Job 26 accepted milliseconds after Job 25's geometry was prepared but before Job 25 finished; Job 25 nevertheless finalized. The proposed behavior has not been tested on hardware.
+The October 10 deployment logs showed Job 26 accepted milliseconds after Job 25's geometry was prepared but before Job 25 finished; Job 25 nevertheless finalized. The queue policy has not been implemented; the proposed terminal sequence failed the hardware probe below.
+
+## Hardware gate result (2026-10-11)
+
+On the PT-2730 with user-confirmed 24 mm tape, the single-label `each`, precut-on baseline transferred successfully and the user observed one leader and one printed rectangle. The immediate continuation FF followed by separate EJECT also transferred successfully, but the user observed only one leader and no rectangle. Captures contain identical raster payloads; they differ in advanced mode (`08` versus `00`) and the drain's additional FF before EJECT. See `tests/CUT-PROBE.md` for the recorded evidence.
+
+This failed gate blocks the production changes below. Their finalization mechanism remains a proposal, not a validated implementation plan. The cause is unknown; a delay or alternate command cannot be assumed to fix it. Stop further physical comparisons and revise the mechanism with the user before resuming.
 
 ## Goals / Non-Goals
 

@@ -27,4 +27,4 @@ None. This repository has no main specifications. Revise ADR-0008's early decisi
 - Primarily `src/driver.c`, with focused cutter/adapter tests, README, and ADR-0008 updates. Reuse existing command builders, state, and PAPPL scheduling.
 - No new filter, MIME type, dependency, batch registry, queue, raster encoder, or labeler changes.
 - Preserve image geometry, strict width rejection, offline recovery, normal no-cut behavior, and PNG copy limits. Queue ordering and the existing `end` plus precut defect (#42) are outside scope.
-- A separate eject after continuation-mode printing is not yet hardware-proven. Real PT-2730 verification is required before declaring the leader issue fixed or rolling out the change.
+- The proposed immediate FF followed by a separate eject failed the initial PT-2730 probe: the user observed only a leader, while the baseline printed its rectangle. Production implementation is paused until the finalization mechanism is revised and physically verified. See `design.md` and `tests/CUT-PROBE.md` for the evidence.
