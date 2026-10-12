@@ -15,5 +15,11 @@
 
 - [x] 3.1 Run the core CMake/CTest gates, the full pinned PAPPL deploy build, and real IPP/socket checks for none/trim/default/collection/copies; verify unsupported finishings and existing strict-width/raw-format behavior remain correct, and run strict OpenSpec validation.
 - [x] 3.2 Verify explicit none jobs followed by trim on the PT-2730, including idle gaps, copies, precut on/off, actual final cuts, leaders, measured lengths, no extra blank label, and offline recovery; leave this gate open if only software evidence exists.
-- [ ] 3.3 Sync specifications and archive before merging; verify accepted specs/archive and then follow the repository's PR convention.
+- [x] 3.3 Sync specifications and archive before merging; verify accepted specs/archive and then follow the repository's PR convention.
 - [ ] 3.4 Deploy only when rollout is authorized through pfa's SSH connection to vault; verify deployed revision and physical output and retain the prior server image for rollback.
+
+Integration evidence: all main requirements and scenarios match the archived
+delta, including its Purpose; strict main-spec validation passed. The archive
+preserves .openspec.yaml. Final implementation commit 90a80a4 passed GitHub CI
+(run 38278975501), and PR #45 was marked ready after that result. Production
+rollout remains pending authorization and its own output check.
