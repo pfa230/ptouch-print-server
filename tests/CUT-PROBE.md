@@ -308,3 +308,21 @@ joined X rectangles, cut, then one X rectangle, cut. Status queries therefore
 preserved continuation without introducing a reset, cut, or extra blank label.
 This completes physical validation of the polling correction and closes the
 hardware gate again before publication.
+
+
+## Authorized production rollout (2026-10-12)
+
+After the user authorized rollout, production was updated through pfa's SSH
+connection to vault using the published immutable image digest
+`sha256:009854ec593d74f65f38f0615dbbd79ddb44fe36b83b55cfe7fb77ec4207c10e`.
+The running container identifies merged revision `9510396`; IPP responds and the
+previous image remains tagged `ptouch-rollback:20261012-before-finishings`.
+The rollout record is `/tmp/ptouch-production-rollout-20261012.json` on vault.
+
+One explicitly trimmed X label was submitted to production. The job completed
+one impression with zero printer errors, followed by receiving-ready. Its log
+is `/tmp/ptouch-production-trim-check-20261012.log` on vault. The user observed
+"leader, cut, rectangle, cut", confirming the expected leader and final cut on
+the deployed revision. This closes the production physical-validation gate.
+Labeler support for the finishing choices is filed as
+https://github.com/pfa230/labeler/issues/430.
