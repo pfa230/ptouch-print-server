@@ -6,7 +6,7 @@ See proposal.md for the revised scope. The user explicitly replaced queue infere
 
 The driver already advertises `PAPPL_FINISHINGS_TRIM`. Pinned PAPPL 1.4.11 resolves `finishings` or `finishings-col`, falling back to `finishings-default`, into `options->finishings`. Its current default is `none`. The driver instead reads `PTOUCH_CUT_MODE`, replans at the final page's start when another job is pending, and cuts stranded runs from an idle timer.
 
-The old FF followed by a separate EJECT failed on hardware. It is no longer part of this design. The normal chain-off/EJECT single-label baseline printed successfully. The diagnostic late-chain-off variant also cut a single rectangle free. Multiple-page probes exposed a separate page-boundary transfer failure: accepting print-completed status before receiving-ready left a stale receiving-ready packet for the next page. The corrected receiving-ready diagnostic still needs physical confirmation; retain the evidence in tests/CUT-PROBE.md.
+The old FF followed by a separate EJECT failed on hardware. It is no longer part of this design. The normal chain-off/EJECT single-label baseline printed successfully. The diagnostic late-chain-off variant also cut a single rectangle free. Multiple-page probes exposed a separate page-boundary transfer failure: accepting print-completed status before receiving-ready left a stale receiving-ready packet for the next page. The actual IPP driver with receiving-ready handling printed three trim copies on 2026-10-12; the user observed one leader and three X labels, all cut apart including the last. Retain the diagnostic and physical evidence in tests/CUT-PROBE.md.
 
 ## Goals / Non-Goals
 
@@ -18,7 +18,7 @@ The old FF followed by a separate EJECT failed on hardware. It is no longer part
 
 ### Resolve cutting once from the job option
 
-Select `PT_CUT_EACH` when `options->finishings` contains `PAPPL_FINISHINGS_TRIM`, otherwise `PT_CUT_NONE`. Use the existing terminal cutter plan once with `chain_out=false`; remove queue-driven replanning. `trim` cuts copies individually and finishes the final copy with the established chain-off/EJECT sequence. `none` disables all cutter commands, including precut, and ends pages with continuation FF. Keep `PTOUCH_PRECUT` only as the leader policy for trim jobs. The old `PTOUCH_CUT_MODE` is obsolete rather than an override of the client.
+Select `PT_CUT_EACH` when `options->finishings` contains `PAPPL_FINISHINGS_TRIM`, otherwise `PT_CUT_NONE`. Use the existing terminal cutter plan once with `chain_out=false`; remove queue-driven replanning. `trim` cuts copies individually and finishes the final copy with the established chain-off/EJECT sequence. `none` disables all cutter commands, including precut, and ends pages with continuation FF. Keep `PTOUCH_PRECUT` only as the leader policy for trim jobs. When it is off, disable autocut on the first copy and enable it before every later copy, including the terminal one; disabling it on the terminal copy left the last two copies joined in the 2026-10-12 physical test. The old `PTOUCH_CUT_MODE` is obsolete rather than an override of the client.
 
 Use PAPPL's existing advertised default, including any supported configuration of it. Do not add a hidden fallback to the old environment setting. Both enum finishings and finishings-col templates pass through PAPPL's normal resolution.
 

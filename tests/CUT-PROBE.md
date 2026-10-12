@@ -199,3 +199,92 @@ await the user's observation and cannot be inferred from Completed alone. The
 log is `/tmp/ptouch-finishing-hardware-20261011/trim-three-copies.log` on vault
 and in the same directory locally. Explicit none/trim runs, idle gaps, precut
 off, and hardware offline recovery remain open gates.
+
+
+## Observed reprint (2026-10-12)
+
+The same candidate (`b5fa376`) and 24 mm framed-X PNG were rerun on explicit
+user request, with `finishings=11`, three copies, and precut enabled. PAPPL
+again completed three impressions after three receiving-ready notifications,
+all with zero printer error bits. The normal server was restored to running.
+
+The user observed one leader followed by three rectangles with X and confirmed
+that all three were cut apart, including the last. This validates the three-copy
+trim/receiving-ready case physically. It does not yet complete the separate
+none-to-trim, precut-off, length measurement, and hardware offline-recovery cases.
+The new log is `/tmp/ptouch-finishing-hardware-20261011/trim-three-copies-reprint-20261012.log`
+on vault; the previous log was preserved.
+
+
+## Separate no-cut jobs followed by trim, with idle gaps (2026-10-12)
+
+The unchanged candidate printed three separate single-copy jobs, explicitly
+selecting none, none, then trim. Each no-cut job completed and the harness left
+the candidate idle for seven seconds before submitting the next job. Each job
+reported zero printer errors and reached receiving-ready. The normal server was
+restored after the final trim job. The log is
+`/tmp/ptouch-finishing-hardware-20261011/none-none-trim-idle-20261012.log` on vault.
+
+The user observed an uncut leader joined to two uncut X rectangles, a cut, then
+another rectangle followed by a cut. This verifies that none disables leader,
+intermediate, idle, and terminal cuts; the subsequent trim job detaches the
+previous joined strip and its own final label. The leading tape remained attached
+to the uncut strip rather than being ejected as a separate blank label.
+
+
+## Precut-disabled failure and local correction (2026-10-12)
+
+With precut disabled, the unchanged candidate completed a single-copy trim job
+and then a three-copy trim job. The user observed leader attached to one
+rectangle followed by a cut; then a leader cut, one rectangle cut, and two
+rectangles together followed by a cut. The three-copy case therefore failed
+individual separation despite every job reporting Completed and zero errors.
+The vault log is `trim-precut0-single-and-copies-20261012.log` in the same hardware
+result directory.
+
+The old precut-off per-copy mode flags were 40/40/00: autocut was enabled on the
+first copy and disabled on the terminal copy. A local correction uses 00/40/40,
+leaving leader cutting disabled on the first copy while retaining boundary cuts
+before later copies. The final EJECT still cuts the last copy free. The new pure
+cutter regression failed against the old flags and passes with this correction;
+physical verification of the corrected flags is still pending. The correction
+has not been committed or pushed.
+
+
+## Corrected precut-disabled copies physically observed (2026-10-12)
+
+The local candidate with per-copy mode flags 00/40/40 completed the same
+single-copy trim test followed by three trim copies. Both jobs reported zero
+printer errors and consumed receiving-ready after every page; the normal server
+was restored. The user observed leader attached to one rectangle followed by a
+cut, then leader attached to one rectangle cut, another rectangle cut, and the
+last rectangle cut. All three copies in the second job were therefore separated,
+including the final copy, without a separate leader cut. This physically confirms
+the local correction; it remains uncommitted and unpushed pending the remaining
+overall validation gates. The vault log is
+`trim-precut0-fixed-single-and-copies-20261012.log` in the hardware result directory.
+
+
+## Length observation (2026-10-12)
+
+The user measured the printed X rectangle's long edge as approximately one
+inch, consistent with the expected 25.4 mm for 180 raster rows at 180 dpi.
+The user then switched the printer off for the remaining offline-recovery test.
+
+
+## Offline recovery and completed hardware gate (2026-10-12)
+
+With the printer switched off and absent from USB, the corrected candidate
+accepted a single-copy trim job and kept it waiting for the printer. After the
+user switched it on, the media refresh confirmed 24 mm tape, printing consumed
+receiving-ready with zero printer errors, and the job completed one impression.
+The user observed "leader, cut, rectangle, cut". The normal server was restored
+and its previous image retained. The log is
+`/tmp/ptouch-finishing-hardware-20261011/offline-queued-trim-20261012.log` on vault.
+
+Together with the observations above, this completes the PT-2730 hardware gate:
+explicit none jobs with idle gaps followed by trim, trim copies with precut on
+and off, final separation, expected leaders, approximately one-inch frame
+length, no extra blank label, and recovery of a queued job after power-on.
+The local precut correction is now physically validated and may be published.
+Production rollout remains a separate step.

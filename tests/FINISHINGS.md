@@ -48,3 +48,25 @@ The real-USB candidate test on 2026-10-11 completed three trim copies with zero
 printer error bits and a receiving-ready notification consumed after each copy.
 Physical output observations and the remaining hardware matrix are pending; see
 CUT-PROBE.md.
+
+
+On 2026-10-12 the observed precut-disabled three-copy test exposed joined final
+two copies. A failing cutter regression and local correction keep autocut off
+for the first copy and on for later copies, including the last. All six container
+suites and seven host capture tests pass; the user observed all three corrected
+copies cut apart, with leading tape attached to the first copy.
+
+The CI smoke's terse ipptool command exited zero and printed PASS, but its grep
+required a successful-ok string only printed in verbose mode. Its final log grep
+could also fail before the container's log follower emitted startup lines. The
+local workflow now uses the IPP test's exit status, prints a verbose final query,
+and keeps container logs as diagnostics. The corrected shell block passed locally
+with bash -e -o pipefail. These workflow changes are not yet pushed.
+
+The 2026-10-12 hardware gate is now complete: the user observed explicit
+none/none/trim with idle gaps, separated trim copies with precut enabled and
+disabled, approximately one-inch frame length, and successful printing and
+cutting of a queued trim job after switching the printer on. See CUT-PROBE.md
+for the observations and logs. The final deploy image also built successfully
+and passed the corrected workflow smoke locally. This validates publication
+of the final correction; production rollout remains separate.

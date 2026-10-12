@@ -26,6 +26,19 @@ int main(void) {
     assert(ops[2].kind == PT_OP_SETADVANCED && ops[2].arg == 0x08);
     assert(ops[4].kind == PT_OP_EJECT);
 
+    /* With precut disabled, cut BEFORE copies 2/3 and AFTER the final one.
+     * Turning autocut off on the final copy left copies 2/3 joined on PT-2730. */
+    n = pt_plan_batch(3, 24, PT_CUT_EACH, 0, false, ops, 64);
+    int modes[3] = {0}, found = 0;
+    for (int i = 0; i < n; i++) {
+        if (ops[i].kind == PT_OP_SETMODE) modes[found++] = ops[i].arg;
+    }
+    assert(found == 3 && modes[0] == 0 && modes[1] == 0x40 && modes[2] == 0x40);
+    assert(ops[n - 1].kind == PT_OP_EJECT);
+    n = pt_plan_batch(1, 24, PT_CUT_EACH, 0, false, ops, 64);
+    assert(n == 4 && ops[0].kind == PT_OP_SETMODE && ops[0].arg == 0);
+    assert(ops[n - 1].kind == PT_OP_EJECT);
+
     /* NONE: no printinfo, setmode 0x00, chain 0x00, FF (no eject) — 4 ops/label */
     n = pt_plan_batch(2, 12, PT_CUT_NONE, 1, false, ops, 64);
     assert(n == 8);

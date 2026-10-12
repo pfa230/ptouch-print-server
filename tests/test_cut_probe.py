@@ -89,8 +89,7 @@ class CaptureTests(unittest.TestCase):
                             self.assertEqual(advanced, [0] * labels if sequence == "drain" else
                                              [0] * (labels - 1) + [8])
                             modes = [data[-1] for name, data in commands if name == "mode"]
-                            expected = [64 if precut or (mode == "each" and
-                                        (sequence == "drain" or i < labels - 1)) else 0
+                            expected = [64 if precut or (mode == "each" and i > 0) else 0
                                         for i in range(labels)]
                             self.assertEqual(modes, expected)
                         # Changing finalization must not change the actual fixture pixels.
