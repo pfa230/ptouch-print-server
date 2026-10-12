@@ -15,10 +15,6 @@
 #define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
 #define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
 
-/* Idle finaliser for cross-job chaining (#41). Register as a 1 s system timer:
- * it ejects (and cuts) a run that chained out to a job that never printed. */
-bool pt_chain_timer(pappl_system_t *system, void *cb_data);
-
 /* #43: make media-default describe the tape that is actually loaded, before the
  * caller builds the page geometry from it. A no-op unless the printer is on our
  * ptouch:// scheme and its media is suspect (never confirmed by a live read, or

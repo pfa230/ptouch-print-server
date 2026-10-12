@@ -49,13 +49,13 @@ jobs:
             -e PTOUCH_DEVICE_URI=socket://127.0.0.1:9100 ptouch-deploy:pr
           for i in $(seq 1 15); do
             if ipptool -t ipp://127.0.0.1:18000/ipp/print/ptouch \
-                 ./spikes/fixtures/get-printer-attributes.test 2>/dev/null | grep -qi successful-ok; then
+                 ./spikes/fixtures/get-printer-attributes.test >/tmp/ptouch-smoke-ipp.log 2>&1; then
               echo "IPP OK"; break; fi
             sleep 1
           done
-          ipptool -t ipp://127.0.0.1:18000/ipp/print/ptouch \
-            ./spikes/fixtures/get-printer-attributes.test 2>&1 | grep -i successful-ok
-          docker logs ptouch-smoke 2>&1 | grep -iE "Created printer|avahi|error" | tail -5
+          ipptool -tv ipp://127.0.0.1:18000/ipp/print/ptouch \
+            ./spikes/fixtures/get-printer-attributes.test
+          docker logs ptouch-smoke
       - name: Build + push (main)
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6

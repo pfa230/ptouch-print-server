@@ -29,15 +29,16 @@ What it does today:
   submitted image rather than a fixed page.
 - Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
   match the tape they actually loaded.
-- Pre-cuts once, cuts labels apart, and **chains consecutive queued jobs** so a
-  pool of jobs costs one leader rather than one per job.
+- Uses each job's IPP **finishings** choice: `none` leaves tape uncut and keeps
+  the run open; `trim` cuts its labels and finalizes the last one. Queue contents
+  and idle time do not choose whether to cut.
 - Rejects a job whose width does not match the loaded tape, before anything is
   sent to the printer.
 - Reports `offline` when the printer is switched off instead of disappearing, and
   recovers on its own when it comes back - queued jobs then print.
 
-Known gaps are tracked as issues: cross-tape centring is uncalibrated, and
-`PTOUCH_CUT_MODE=end` cuts every label when pre-cut is enabled.
+Known gaps are tracked as issues; cross-tape centring is uncalibrated.
+Only PT-2730 behavior is hardware-certified.
 
 ## Architecture
 
@@ -125,16 +126,43 @@ over the 300 mm roll maximum is refused rather than cropped. JPEG is unaffected:
 it still goes through PAPPL's built-in filter and prints on the fixed media
 length.
 
+### Cutting
+
+Select cutting through the standard IPP job attribute `finishings`:
+
+| Selection | IPP enum | Behavior |
+|-----------|----------|----------|
+| `none` | `3` | No leader, intermediate, or terminal cuts; leave the tape run open |
+| `trim` | `11` | Cut each requested copy and finalize the last label |
+
+PAPPL also accepts `finishings-col` with `finishing-template=none` or `trim`.
+An omitted option uses the advertised `finishings-default`, currently `none`.
+Clients that require a cut must request it. For example, with a CUPS queue named
+`ptouch`:
+
+```sh
+lp -d ptouch -o finishings=3 intermediate.png
+lp -d ptouch -o finishings=11 final.png
+```
+
+The server does not infer a batch boundary from queued jobs. A no-cut run remains
+uncut during idle time or if its intended final job is canceled or never arrives.
+A subsequent job continues without resetting the unfinished run, even after an
+idle gap. State is kept in memory, so restarting the server during an unfinished
+run is not supported. `none` disables all cutting; it does not promise that the
+intermediate labels are individually separated.
+
 ## Configuration
 
-The print path is configured entirely through environment variables (no config
-file or volume). The driver reads them per job.
+Cutting is selected by the job's finishing option. These environment variables
+configure the remaining print behavior; the driver reads them per job.
 
 | Variable | Values | Meaning |
 |----------|--------|---------|
-| `PTOUCH_CUT_MODE` | `each` (default) / `end` / `none` | Cut policy for a batch: cut after every label, only after the last, or never |
-| `PTOUCH_PRECUT` | `1` (default) / `0` | Feed and cut a leader before the first label of a batch |
+| `PTOUCH_PRECUT` | `1` (default) / `0` | Enable leader cutting for `trim` jobs; `none` always disables it |
 | `PTOUCH_WIDTH_GUARD` | `strict` (default) | Refuse to print when the rendered width does not match the loaded tape. Only `strict` is implemented; any other value falls back to `strict` |
+
+`PTOUCH_CUT_MODE` is obsolete and ignored; it cannot override job finishings.
 
 `PTOUCH_DEVICE_URI` overrides device discovery with an explicit URI (e.g.
 `socket://127.0.0.1:9100`) for testing without a PT-2730; the printer registers
@@ -166,7 +194,6 @@ services:
         soft: 65536                      # avahi dies with it, and DNS-SD
         hard: 65536                      # advertises nothing at all
     environment:
-      PTOUCH_CUT_MODE: each
       PTOUCH_PRECUT: "1"
       PTOUCH_WIDTH_GUARD: strict
     volumes:

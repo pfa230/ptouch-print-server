@@ -1,37 +1,52 @@
-# 8. Chain consecutive queued jobs, and never re-init mid-chain
+# 8. Respect client finishing and never reset an unfinished run
 
-**Status:** Accepted
+**Status:** Accepted; revised on 2026-10-11 to replace queue inference.
 
 ## Context
 
-Chaining existed only within a job (copies). Because a PNG is single-page, N different labels must be
-N separate IPP jobs, so a pool of queued jobs - the normal case after the printer has been off - trimmed
-a fresh leader and finalised for every job, wasting tape.
+Different PNG labels arrive as separate IPP jobs. The old driver checked the
+queue before the final label started, which missed followers arriving during
+printing. It also cut an open run from an idle timer. Neither signal describes
+what the client wants.
+
+The driver already advertises trimming through IPP. PAPPL resolves both
+`finishings` and `finishings-col`, including defaults, into its job options;
+the driver previously ignored that value in favor of `PTOUCH_CUT_MODE`.
+
+Earlier hardware investigation established that sending `ESC @` into an open
+run could wedge the PT-2730 with a cassette-changed message. Suppressing that
+reset remains necessary regardless of who decides whether to cut. The attempted
+queue-drain sequence of FF followed by a standalone EJECT failed its hardware
+probe and is not used by this decision.
 
 ## Decision
 
-When another job is genuinely pending, end the current job chained (`SETADVANCED 0x00` + `FF`) instead
-of finalising (`0x08` + `EJECT`), and **skip the `ESC @` initialisation** when starting into an open
-chain. Keep `rasterstart`.
+Use only the resolved job finishing choice to select the existing cutter plan:
+`none` disables all cuts and leaves the run open; `trim` cuts copies individually
+and finalizes the final label with chain-off/EJECT. An omitted choice honors the
+advertised default, currently `none`. `PTOUCH_CUT_MODE` is ignored.
+
+Remove queue scans, page-start replanning, the idle cutter timer, and automatic
+terminal output during abort cleanup. Keep per-printer open-run and media state
+to suppress `ESC @` between unfinished jobs, including after idle time and a
+handle close/reopen. Retain rasterstart. Idle status polling must not reset an
+open run: request status without `ESC @`, including before the next PNG job's
+geometry is built, so cassette changes are still detected. The existing USB
+presence check still detects disconnection.
+
+Check actual write/flush transfers before recording terminal output, without
+replaying a failed label or cut. At USB page boundaries, consume unsolicited
+status until receiving-ready before sending another page. A print-completed
+packet can precede that readiness indication; waiting for it alone leaves a
+stale packet for the following page. This is device flow control, independent
+of the finishing decision.
 
 ## Consequences
 
-- A pooled run produces one leader for the whole run instead of one per job.
-- `ESC @` mid-chain is what wedged the printer: it reported "Tape cassette changed!" and stopped
-  accepting data, needing a physical power-cycle. PAPPL keeps the device open while jobs remain
-  active (it closes only when the active count reaches zero), so the reset landed on a live,
-  unfinalised stream.
-- There is no separate "pre-cut" command. Pre-cut is autocut; the leader exists only because the
-  previous job's `EJECT` advanced tape past the cutter. Chaining removes the cause, so the following
-  job needs no special handling beyond skipping `ESC @`.
-- A boundary only chains if the next job is already queued when the current job's final label starts,
-  since the chain bit precedes the last page's raster. Rapid-fire submissions may not chain the first
-  boundary; the pooled case, which is the one that wastes tape, chains fully.
-- Supporting machinery: a pending-job scan (`papplPrinterGetNumberOfActiveJobs` counts held and
-  incomplete jobs and reads unlocked, so it is unsuitable), per-printer state keyed by printer id
-  (never a raw pointer, which can dangle), and an idle timer that finalises a chain left open.
-
-## Alternatives considered
-
-- **Expose chaining as a per-job `finishings` option.** Simpler and still possible as an enhancement,
-  but it does not avoid the `ESC @` defect - the printer does not care who decided to chain.
+- Client intent controls the cut even if other work is queued or the queue is empty.
+- Clients must request `trim` when they want cutting; the advertised none default is honored.
+- No-cut jobs remain uncut until an explicit trim job or physical intervention.
+- `none` disables every cut and can leave a strip of joined labels.
+- PNG geometry, existing formats, width checks, copy limits, and scheduling stay unchanged.
+- Process restart does not preserve unfinished-run state.
+- Socket captures establish command behavior; PT-2730 output must separately verify cuts and leaders before claiming the issue fixed.

@@ -25,8 +25,9 @@ typedef struct {
     int        page_index; /* page this op belongs to */
 } pt_op;
 
-/* Plan the op sequence for an N-page batch, replicating the verified macOS-fork
- * `flush_print_job` logic. N comes from PAPPL pages/copies in one device session
+/* Plan the op sequence for an N-page batch based on the macOS-fork
+ * `flush_print_job` logic, with PT-2730 copy-boundary corrections.
+ * N comes from PAPPL pages/copies in one device session
  * (NOT multi-document). Returns the op count, or -1 if `cap` is too small.
  * Pure: the driver renders each op to bytes via protocol.c.
  *
