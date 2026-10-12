@@ -10,7 +10,7 @@ Only the Brother PT-2730 is hardware-certified.
 Build with the pinned PAPPL/libusb environment provided by `Dockerfile.deploy`:
 
 ```sh
-cmake -S . -B build -DPT_PROBE_TRANSPORT=ON
+cmake -S . -B build
 cmake --build build --target ptouch-cut-probe
 ```
 
