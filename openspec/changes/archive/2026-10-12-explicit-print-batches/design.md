@@ -26,7 +26,7 @@ Use PAPPL's existing advertised default, including any supported configuration o
 
 Retain the bounded per-printer open-run/media state and its lock. Mark an unfinished run open before writing its page terminator; clear it only after a checked terminal EJECT transfer. A no-cut job with no available state slot fails before output rather than silently cutting or starting an untracked run.
 
-Skip ESC @ on subsequent jobs while that state is open, even when PAPPL closed and reopened its USB handle during idle time. Preserve rasterstart. Suppress destructive idle status initialization while a run remains open; absence of the device still clears stale state through the existing presence check. Remove all timer registration, idle counters, job scans, and automatic end-of-job detach. Cancellation or failure does not invent an unrequested cut; cleanup frees job data and never replays raster or terminal output.
+Skip ESC @ on subsequent jobs while that state is open, even when PAPPL closed and reopened its USB handle during idle time. Preserve rasterstart. During an unfinished run, request status without initialization, including before building the next PNG job's geometry, so cassette changes remain detectable without resetting tape. Absence of the device still clears stale state through the existing presence check. Remove all timer registration, idle counters, job scans, and automatic end-of-job detach. Cancellation or failure does not invent an unrequested cut; cleanup frees job data and never replays raster or terminal output.
 
 ### Check transfers and page readiness
 

@@ -75,16 +75,16 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
  * read result, which separates an I/O error (< 0) from no answer at all (0). */
 typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
 
-/* Read the live tape from an already-open device: ESC @ + ESC i S, then poll for
+/* Read the live tape from an already-open device: optional ESC @ + ESC i S, then poll for
  * the reply. The caller owns the device and interprets the result; a supported
  * tape is `parsed && st.tape_px > 0`. Callers must have checked that this is a
  * ptouch:// device: pt_usb_read_status casts the device data to our libusb
  * struct, so calling it on socket:// is undefined behaviour. */
-static pt_live_read pt_read_live_tape(pappl_device_t *device)
+static pt_live_read pt_read_live_tape(pappl_device_t *device, bool initialize)
 {
     uint8_t cmd[8];
     pt_live_read r = {0};
-    if (!pt_dev_write(device, cmd, pt_cmd_init(cmd)) ||
+    if ((initialize && !pt_dev_write(device, cmd, pt_cmd_init(cmd))) ||
         !pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
         r.n = -1;
         return r;
@@ -266,7 +266,7 @@ static bool r_startjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     pappl_preason_t pr0 = papplPrinterGetReasons(printer);
     if (duri && !strncmp(duri, "ptouch://", 9) &&
         (pr0 & (PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY))) {
-        pt_live_read lr = pt_read_live_tape(d);
+        pt_live_read lr = pt_read_live_tape(d, !pt_chain_get(printer));
         if (lr.parsed && lr.st.tape_px > 0) {
             pappl_media_col_t mc;
             if (media_col_for(lr.st.tape_mm, 10000, dpi, &mc)) {
@@ -539,10 +539,6 @@ static bool status_cb(pappl_printer_t *printer)
         return true;
     }
 
-    /* A no-cut run can remain open indefinitely. Idle polling must not send
-     * ESC @ into it; cached media stays valid until the device disappears. */
-    if (pt_chain_get(printer)) return true;
-
     pappl_device_t *dev = papplPrinterOpenDevice(printer);
     if (!dev) {
         /* present but not openable: a job owns it; clear OFFLINE, leave media */
@@ -550,7 +546,8 @@ static bool status_cb(pappl_printer_t *printer)
         return true;
     }
 
-    pt_live_read lr = pt_read_live_tape(dev);
+    /* Keep cassette detection while omitting the reset for unfinished tape. */
+    pt_live_read lr = pt_read_live_tape(dev, !pt_chain_get(printer));
     papplPrinterCloseDevice(printer);
 
     pt_status st = lr.st;
@@ -609,13 +606,10 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
      * socket:// sink must never reach it (the same gate as #38 and #40). */
     if (!duri || strncmp(duri, "ptouch://", 9))
         return true;
-    /* An open chain means the previous job left the tape at the head with the
-     * device still open. ESC @ there resets the printer mid-run ("Tape cassette
-     * changed!", #41), and the media cannot be stale anyway: it was just printed on. */
-    if (pt_chain_get(printer))
-        return true;
-    /* Only suspect media is worth the poll; a confirmed, online printer pays nothing. */
-    if (pt_media_confirmed(printer) &&
+    /* An idle unfinished run can outlive its cassette. Query without ESC @
+     * before building geometry; a confirmed closed run keeps the fast path. */
+    bool open = pt_chain_get(printer);
+    if (!open && pt_media_confirmed(printer) &&
         !(papplPrinterGetReasons(printer) & (PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY)))
         return true;
 
@@ -626,7 +620,7 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
 
     const char *fail = "tape not readable yet";   /* reason if the barrier gives up */
     for (;;) {
-        pt_live_read lr = pt_read_live_tape(device);
+        pt_live_read lr = pt_read_live_tape(device, !open);
         if (lr.parsed && lr.st.tape_px > 0) {
             pappl_media_col_t mc;
             if (media_col_for(lr.st.tape_mm, 10000, dd.x_default, &mc) &&
@@ -635,6 +629,8 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
                  * succeeded, so the reasons may be cleared. */
                 papplPrinterSetReasons(printer, PAPPL_PREASON_NONE,
                                        PAPPL_PREASON_OFFLINE | PAPPL_PREASON_MEDIA_EMPTY);
+                if ((int)(dd.media_ready[0].size_width / 100) != lr.st.tape_mm)
+                    pt_chain_set(printer, false);
                 pt_set_media_confirmed(printer, true);
                 /* papplPrinterSetReadyMedia reaches media_default only when the ready
                  * entry's source matches the default's ("main-roll" in both, from
@@ -652,6 +648,7 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
         }
         if (lr.parsed && lr.st.tape_mm == 0) {       /* answered, cassette empty */
             papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_EMPTY, PAPPL_PREASON_OFFLINE);
+            pt_chain_set(printer, false);
             pt_set_media_confirmed(printer, false);
             fail = "no tape loaded";
             break;

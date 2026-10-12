@@ -61,7 +61,8 @@ required a successful-ok string only printed in verbose mode. Its final log grep
 could also fail before the container's log follower emitted startup lines. The
 local workflow now uses the IPP test's exit status, prints a verbose final query,
 and keeps container logs as diagnostics. The corrected shell block passed locally
-with bash -e -o pipefail. These workflow changes are not yet pushed.
+with bash -e -o pipefail. The published workflow subsequently passed GitHub CI
+on commit 688ffd4 (run 38278139208).
 
 The 2026-10-12 hardware gate is now complete: the user observed explicit
 none/none/trim with idle gaps, separated trim copies with precut enabled and
@@ -70,3 +71,16 @@ cutting of a queued trim job after switching the printer on. See CUT-PROBE.md
 for the observations and logs. The final deploy image also built successfully
 and passed the corrected workflow smoke locally. This validates publication
 of the final correction; production rollout remains separate.
+
+Final review found that skipping all idle status polling would make cassette
+width changes invisible until USB disconnection. A new regression failed
+against that implementation. The local correction requests status without
+ESC @ while a run remains open, both during idle polling and before creating
+the next PNG job's geometry. Tests confirm same-width continuation, changed
+width publication and chain clearing, and empty cassette detection, with only
+the three-byte status request on the wire. All six CTest suites pass with the
+correction. The full deploy image built and passed the corrected smoke. The
+user confirmed the expected joined none/none strip and separately finalized
+trim label after status queries and idle gaps, completing physical validation
+before publication. The follow-up review reported no remaining actionable
+defects.

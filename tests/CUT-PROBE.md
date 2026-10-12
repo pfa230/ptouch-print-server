@@ -288,3 +288,23 @@ and off, final separation, expected leaders, approximately one-inch frame
 length, no extra blank label, and recovery of a queued job after power-on.
 The local precut correction is now physically validated and may be published.
 Production rollout remains a separate step.
+
+
+## Non-resetting media polling follow-up (2026-10-12)
+
+Final review found that skipping all status polling after a no-cut job could
+leave cached tape width stale after a cassette swap while USB stayed present.
+The local follow-up retains status queries but omits ESC @ for unfinished runs,
+including a query before the next PNG job's geometry. Its cassette-change
+regression failed before correction and passes afterwards; all six CTest suites,
+the full deploy-image build, and corrected container smoke pass.
+
+The candidate completed three separate none/none/trim jobs with seven-second
+idle gaps and explicit status queries between them. Every job reported zero
+printer errors and receiving-ready, and the normal server was restored. The log
+is `none-none-trim-status-poll-20261012.log` in the same vault hardware directory.
+The user confirmed this output matched the expected leader attached to two
+joined X rectangles, cut, then one X rectangle, cut. Status queries therefore
+preserved continuation without introducing a reset, cut, or extra blank label.
+This completes physical validation of the polling correction and closes the
+hardware gate again before publication.

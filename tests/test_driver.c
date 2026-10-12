@@ -245,9 +245,8 @@ int main(void)
         assert(page_test(j, o, d)); end(j, o, d);
         expect_wire(1, 1, 1, 0, false); assert(pt_chain_get(p));
     }
-    /* A completed none job remains open across handle close/reopen and polling. */
-    size_t before = wire_used;
-    assert(status_cb(p)); assert(wire_used == before && pt_chain_get(p));
+    /* A completed none job remains open across handle close/reopen. */
+    assert(pt_chain_get(p));
     papplDeviceClose(d); d = papplDeviceOpen("fixture://test", "fixture", NULL, NULL); assert(d);
     reset_wire(); setenv("PTOUCH_CUT_MODE", "none", 1);
     pappl_job_t *trim = job(p, "trim", 3, false);
@@ -304,6 +303,34 @@ int main(void)
     o->header.cupsWidth++; reset_wire();
     assert(!r_startjob(j, o, d)); assert(wire_used == 0); end(j, o, d);
     assert(!pt_printfile_cb(j, NULL, d)); assert(wire_used == 0);
+
+    /* Cassette detection must survive an open none run without ESC @. */
+    pappl_printer_t *poll = papplPrinterCreate(sys, 0, "poll", "brother_ptouch",
+                       "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", "fixture://poll"); assert(poll);
+    const int widths[] = {12, 24, 0};
+    for (int i = 0; i < 3; i++) {
+        ready_status(0, 32); statuses[10] = widths[i]; statuses[18] = statuses[19] = 0;
+        status_size = 32; reset_wire(); pt_chain_set(poll, true);
+        assert(status_cb(poll)); assert(status_used == 32);
+        assert(wire_used == 3 && !memcmp(wire, "\x1b\x69\x53", 3));
+        assert(pt_chain_get(poll) == (i == 0));
+        if (widths[i]) {
+            papplPrinterGetDriverData(poll, &dd);
+            assert(dd.media_ready[0].size_width == widths[i] * 100);
+        } else {
+            assert(papplPrinterGetReasons(poll) & PAPPL_PREASON_MEDIA_EMPTY);
+            assert(!pt_media_confirmed(poll));
+        }
+    }
+    /* Query before PNG geometry too, even when the previous run was confirmed. */
+    ready_status(0, 32); statuses[10] = 12; statuses[18] = statuses[19] = 0;
+    status_size = 32; reset_wire(); pt_chain_set(usb, true);
+    j = job(usb, "none", 1, false);
+    assert(pt_refresh_ready_media(j, d)); assert(status_used == 32);
+    assert(wire_used == 3 && !memcmp(wire, "\x1b\x69\x53", 3));
+    assert(!pt_chain_get(usb));
+    o = papplJobCreatePrintOptions(j, 1, false); assert(o->header.cupsWidth == 85);
+    papplJobDeletePrintOptions(o);
 
     /* State exhaustion is a failure before output, never an implicit cut. */
     memset(g_chain, 0, sizeof g_chain);

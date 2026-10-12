@@ -30,7 +30,9 @@ Remove queue scans, page-start replanning, the idle cutter timer, and automatic
 terminal output during abort cleanup. Keep per-printer open-run and media state
 to suppress `ESC @` between unfinished jobs, including after idle time and a
 handle close/reopen. Retain rasterstart. Idle status polling must not reset an
-open run; the existing USB presence check still detects disconnection.
+open run: request status without `ESC @`, including before the next PNG job's
+geometry is built, so cassette changes are still detected. The existing USB
+presence check still detects disconnection.
 
 Check actual write/flush transfers before recording terminal output, without
 replaying a failed label or cut. At USB page boundaries, consume unsolicited
