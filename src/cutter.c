@@ -22,7 +22,9 @@ int pt_plan_batch(int n_pages, uint8_t tape_mm, pt_cut_mode mode, int precut,
         int terminal = last_page && !chain_out;
         int cut_after = (mode == PT_CUT_EACH) || (mode == PT_CUT_END && terminal);
         int do_precut = precut && (mode != PT_CUT_NONE);
-        int needs_auto_cut = do_precut || (cut_after && !terminal);
+        /* Autocut separates the preceding label from this one. With no
+         * precut, leave it off only for the first copy, not the last copy. */
+        int needs_auto_cut = do_precut || (mode == PT_CUT_EACH && i > 0);
 
         if (needs_auto_cut) {
             EMIT(PT_OP_PRINTINFO, tape_mm, i);
