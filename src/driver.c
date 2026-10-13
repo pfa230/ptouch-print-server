@@ -213,6 +213,7 @@ static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_
 typedef enum { PT_RUN_CLOSED, PT_RUN_OPEN, PT_RUN_UNCERTAIN } pt_run;
 typedef struct {
     pthread_mutex_t lock;
+    const pt_dev *model;
     pt_run run;
     bool media_confirmed;
 } pt_printer_state;
@@ -387,14 +388,23 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     if (b->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
     bool continuation = pt_chain_get(printer);
     pt_run_set(printer, PT_RUN_UNCERTAIN);
-    uint8_t buf[8];
+    const pt_dev *model = pt_state(printer)->model;
+    bool p710bt = model->pid == 0x20af;
+    uint8_t buf[100];
     if (b->first_label &&
-        ((!continuation && !pt_dev_write(d, buf, pt_cmd_init(buf))) ||
-         !pt_dev_write(d, buf, pt_cmd_rasterstart(buf, 0))))
+        ((!continuation && p710bt && !pt_dev_write(d, buf, pt_cmd_invalidate(buf))) ||
+         (!continuation && !pt_dev_write(d, buf, pt_cmd_init(buf))) ||
+         !pt_dev_write(d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
+         (p710bt && !pt_dev_write(d, buf, pt_cmd_auto_status(buf, true)))))
         return pt_fail_job(j);
-    if (!pt_dev_write(d, buf, pt_cmd_printinfo(buf, b->tape_mm)) ||
+    size_t info_len = p710bt ? pt_cmd_printinfo_extended(buf, b->tape_mm,
+                             o->header.cupsHeight, b->first_label && !continuation ? 0 : 1) :
+                             pt_cmd_printinfo(buf, b->tape_mm);
+    if (!pt_dev_write(d, buf, info_len) ||
         !pt_dev_write(d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
-        !pt_dev_write(d, buf, pt_cmd_setadvanced(buf, 0)))
+        !pt_dev_write(d, buf, pt_cmd_setadvanced(buf, 0)) ||
+        (p710bt && (!pt_dev_write(d, buf, pt_cmd_margin(buf, 14)) ||
+                   !pt_dev_write(d, buf, pt_cmd_compression(buf, 2)))))
         return pt_fail_job(j);
     b->first_label = false;
     b->page_active = true;
@@ -413,7 +423,11 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
         return pt_fail_job(j);
     uint8_t packed[16], buf[24];
     pt_pack_window(packed, l, g.left_px, g.imageable_px);
-    return pt_dev_write(d, buf, pt_cmd_sendraster(buf, packed, sizeof packed)) || pt_fail_job(j);
+    const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
+    size_t length = model->flags & FLAG_RASTER_PACKBITS ?
+                    pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
+                    pt_cmd_sendraster(buf, packed, sizeof packed);
+    return pt_dev_write(d, buf, length) || pt_fail_job(j);
 }
 
 /* Wait for receive-ready, not just print-completed. This is USB flow control,
@@ -602,13 +616,13 @@ static bool status_cb(pappl_printer_t *printer)
     if (pt_recovery_required(printer)) return true;
     const char *uri = papplPrinterGetDeviceURI(printer);
     if (!pt_usb_is_uri(uri)) return true;
-    const pt_dev *model = pt_lookup_name("PT-2730");
+    const pt_dev *model = pt_state(printer)->model;
     ssize_t count = pt_usb_count(model->vid, model->pid);
     if (count != 1) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
         if (!count) pt_chain_set(printer, false);
-        if (count > 1) papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "Multiple PT-2730 devices match; selection is ambiguous");
+        if (count > 1) papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "Multiple %s devices match; selection is ambiguous", model->name);
         return true;
     }
     pappl_device_t *device = papplPrinterOpenDevice(printer);
@@ -617,7 +631,7 @@ static bool status_cb(pappl_printer_t *printer)
         if (papplPrinterGetState(printer) == IPP_PSTATE_PROCESSING) return true;
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
-        papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "PT-2730 is present but cannot be opened or claimed");
+        papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "%s is present but cannot be opened or claimed", model->name);
         return true;
     }
     /* Status requests do not initialize or finalize the printer. */
@@ -673,16 +687,23 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
 
     char model[64];
     parse_mdl(device_id, model, sizeof model);
-    const pt_dev *dev = pt_lookup_name(model);
-    if (!dev || strcmp(dev->name, "PT-2730")) {
+    const pt_dev *dev = model[0] ? pt_usb_supported_model(model) : NULL;
+    if (!dev) {
         papplLog(system, PAPPL_LOGLEVEL_ERROR,
-                 "Unsupported printer identity '%s'; only PT-2730 is print-supported", model);
+                 "Unsupported printer identity '%s'; select PT-2730 or PT-P710BT", model);
+        return false;
+    }
+    if (device_uri && !strncmp(device_uri, "ptouch://", 9) &&
+        pt_usb_model_from_uri(device_uri) != dev) {
+        papplLog(system, PAPPL_LOGLEVEL_ERROR,
+                 "Printer identity '%s' does not match USB URI '%s'", model, device_uri);
         return false;
     }
 
     pt_printer_state *state = calloc(1, sizeof *state);
     if (!state) return false;
     if (pthread_mutex_init(&state->lock, NULL)) { free(state); return false; }
+    state->model = dev;
     data->extension = state;
 
     data->rstartjob_cb = r_startjob;

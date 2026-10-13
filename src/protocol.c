@@ -2,6 +2,12 @@
 #include "protocol.h"
 #include "tables.h"
 
+size_t pt_cmd_invalidate(uint8_t *o)
+{
+    memset(o, 0, 100);
+    return 100;
+}
+
 size_t pt_cmd_init(uint8_t *o)
 {
     o[0] = 0x1b; o[1] = 0x40;
@@ -33,6 +39,30 @@ size_t pt_cmd_printinfo(uint8_t *o, uint8_t mm)
     o[0] = 0x1b; o[1] = 0x69; o[2] = 0x63; o[3] = 0x84;
     o[4] = 0x00; o[5] = mm; o[6] = 0x00; o[7] = 0x00;
     return 8;
+}
+
+size_t pt_cmd_printinfo_extended(uint8_t *o, uint8_t mm, uint32_t rows, uint8_t page)
+{
+    o[0] = 0x1b; o[1] = 0x69; o[2] = 0x7a; o[3] = 0x84;
+    o[4] = 0x00; o[5] = mm; o[6] = 0x00;
+    o[7] = (uint8_t)rows;
+    o[8] = (uint8_t)(rows >> 8);
+    o[9] = (uint8_t)(rows >> 16);
+    o[10] = (uint8_t)(rows >> 24);
+    o[11] = page; o[12] = 0x00;
+    return 13;
+}
+
+size_t pt_cmd_compression(uint8_t *o, uint8_t mode)
+{
+    o[0] = 0x4d; o[1] = mode;
+    return 2;
+}
+
+size_t pt_cmd_auto_status(uint8_t *o, bool enabled)
+{
+    o[0] = 0x1b; o[1] = 0x69; o[2] = 0x21; o[3] = enabled ? 0x00 : 0x01;
+    return 4;
 }
 
 size_t pt_cmd_setmode(uint8_t *o, uint8_t flags)

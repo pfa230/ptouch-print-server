@@ -24,7 +24,8 @@ jobs:
         run: |
           set -e
           sudo apt-get update && sudo apt-get install -y --no-install-recommends cups-ipp-utils
-          python3 scripts/smoke-image.py ptouch-deploy:check
+          python3 scripts/smoke-image.py ptouch-deploy:check --model PT-2730
+          python3 scripts/smoke-image.py ptouch-deploy:check --model PT-P710BT
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v4

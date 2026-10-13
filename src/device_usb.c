@@ -22,13 +22,34 @@
 const pt_dev *pt_usb_supported_model(const char *model)
 {
     if (!model || !*model) model = "PT-2730";
-    return !strcmp(model, "PT-2730") ? pt_lookup_name(model) : NULL;
+    return (!strcmp(model, "PT-2730") || !strcmp(model, "PT-P710BT"))
+        ? pt_lookup_name(model) : NULL;
+}
+
+const pt_dev *pt_usb_model_from_uri(const char *uri)
+{
+    const char *prefix = "ptouch://Brother/";
+    return uri && !strncmp(uri, prefix, strlen(prefix)) && uri[strlen(prefix)]
+        ? pt_usb_supported_model(uri + strlen(prefix)) : NULL;
+}
+
+void pt_usb_format_uri(const pt_dev *model, char *buffer, size_t size)
+{
+    snprintf(buffer, size, "ptouch://Brother/%s", model->name);
+}
+
+void pt_usb_format_id(const pt_dev *model, char *buffer, size_t size)
+{
+    snprintf(buffer, size, "MFG:Brother;MDL:%s;CMD:PT-CBP;", model->name);
 }
 
 bool pt_usb_is_uri(const char *uri)
 {
-    return uri && !strcmp(uri, "ptouch://Brother/PT-2730");
+    return pt_usb_model_from_uri(uri) != NULL;
 }
+
+/* One application queue; registration fixes its discovery selection. */
+static const pt_dev *discovery_model;
 
 static ssize_t count_matches(libusb_device **devs, ssize_t n,
                               uint16_t vid, uint16_t pid, libusb_device **match)
@@ -49,6 +70,7 @@ typedef struct {
     libusb_context       *ctx;   /* per-connection context, exited on close */
     libusb_device_handle *h;
     int detached;
+    const pt_dev *model;
 } pt_usb_conn;
 
 /* Every enumeration uses a FRESH libusb context. A process-lifetime context goes
@@ -74,21 +96,36 @@ static bool pt_usb_list(pappl_device_cb_t cb, void *data,
         if (libusb_get_device_descriptor(devs[i], &d) != 0 || d.idVendor != PT_VID)
             continue;
         const pt_dev *dev = pt_lookup_dev(d.idVendor, d.idProduct);
-        if (!dev || pt_usb_supported_model(dev->name))
+        if (!dev || dev == discovery_model)
             continue;
-        char message[160];
-        snprintf(message, sizeof message, "%s (%04x:%04x) is recognized but not print-supported",
-                 dev->name, d.idVendor, d.idProduct);
+        char message[200];
+        if (pt_usb_supported_model(dev->name))
+            snprintf(message, sizeof message,
+                     "%s (%04x:%04x) is attached but unselected; select PTOUCH_MODEL=%s",
+                     dev->name, d.idVendor, d.idProduct, dev->name);
+        else
+            snprintf(message, sizeof message, "%s (%04x:%04x) is recognized but not print-supported",
+                     dev->name, d.idVendor, d.idProduct);
         if (err_cb) err_cb(message, err_data);
     }
-    const pt_dev *supported = pt_usb_supported_model(NULL);
+    const pt_dev *supported = discovery_model;
+    if (!supported) {
+        libusb_free_device_list(devs, 1);
+        libusb_exit(ctx);
+        return false;
+    }
     ssize_t count = count_matches(devs, n, supported->vid, supported->pid, NULL);
     bool stop = false;
-    if (count == 1)
-        stop = cb("PT-2730 (USB)", "ptouch://Brother/PT-2730",
-                  "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", data);
-    else if (count > 1 && err_cb)
-        err_cb("Multiple PT-2730 devices match; USB selection is ambiguous", err_data);
+    char uri[80], id[100], message[160];
+    pt_usb_format_uri(supported, uri, sizeof uri);
+    pt_usb_format_id(supported, id, sizeof id);
+    if (count == 1) {
+        snprintf(message, sizeof message, "%s (USB)", supported->name);
+        stop = cb(message, uri, id, data);
+    } else if (count > 1 && err_cb) {
+        snprintf(message, sizeof message, "Multiple %s devices match; USB selection is ambiguous", supported->name);
+        err_cb(message, err_data);
+    }
     libusb_free_device_list(devs, 1);
     libusb_exit(ctx);
     return stop;
@@ -97,7 +134,8 @@ static bool pt_usb_list(pappl_device_cb_t cb, void *data,
 static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const char *name)
 {
     (void)name;
-    if (!pt_usb_is_uri(device_uri)) {
+    const pt_dev *supported = pt_usb_model_from_uri(device_uri);
+    if (!supported) {
         papplDeviceError(device, "Unsupported P-touch device URI: %s", device_uri);
         return false;
     }
@@ -112,12 +150,13 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
         return false;
     }
 
-    const pt_dev *supported = pt_usb_supported_model(NULL);
     libusb_device *match = NULL;
     ssize_t count = count_matches(devs, n, supported->vid, supported->pid, &match);
     if (count != 1) {
-        papplDeviceError(device, count > 1 ? "Multiple PT-2730 devices match; USB selection is ambiguous"
-                                        : "PT-2730 is not attached");
+        if (count > 1)
+            papplDeviceError(device, "Multiple %s devices match; USB selection is ambiguous", supported->name);
+        else
+            papplDeviceError(device, "%s is not attached", supported->name);
         libusb_free_device_list(devs, 1);
         libusb_exit(ctx);
         return false;
@@ -151,6 +190,7 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
     c->ctx = ctx;
     c->h = h;
     c->detached = detached;
+    c->model = supported;
     papplDeviceSetData(device, c);
     return true;
 }
@@ -229,8 +269,8 @@ static pappl_preason_t pt_usb_status(pappl_device_t *device)
 
 static char *pt_usb_id(pappl_device_t *device, char *buffer, size_t bufsize)
 {
-    (void)device;
-    if (bufsize) snprintf(buffer, bufsize, "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;");
+    pt_usb_conn *c = papplDeviceGetData(device);
+    if (c) pt_usb_format_id(c->model, buffer, bufsize);
     return buffer;
 }
 
@@ -260,6 +300,7 @@ bool pt_usb_present(uint16_t vid, uint16_t pid)
 
 void pt_usb_register(void)
 {
+    discovery_model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
     papplDeviceAddScheme("ptouch", PAPPL_DEVTYPE_CUSTOM_LOCAL,
                          pt_usb_list, pt_usb_open, pt_usb_close,
                          pt_usb_read, pt_usb_write, pt_usb_status, pt_usb_id);

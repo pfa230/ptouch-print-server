@@ -2,8 +2,11 @@
 
 This guide explains how to add a Brother P-touch model to the device table. A new
 entry makes the model **recognized in metadata**. Discovery and printing remain
-restricted to the explicitly supported PT-2730. A table row does not grant
-print support. See the support gate below.
+restricted to the explicitly supported PT-2730 and PT-P710BT paths. PT-2730
+remains the default; P710BT requires `PTOUCH_MODEL=PT-P710BT`. A table row does
+not grant print support. P710BT integrated USB acceptance passed on 9/12/18 mm tape;
+6/24 mm remain software-only coverage.
+See the support gate below.
 
 ## The `pt_dev` fields
 
@@ -43,17 +46,49 @@ Copied from `src/tables.h`:
 #define FLAG_PLITE           0x04u  /* P-Lite mode (not driven) */
 ```
 
-- `FLAG_NONE`: plain uncompressed raster, PT-2730-style. This is the only path
-  the print code drives today.
+- `FLAG_NONE`: plain uncompressed raster, used by PT-2730.
 - `FLAG_RASTER_PACKBITS`: `sendraster` must wrap each line in a single
   uncompressed PackBits run (`pt_cmd_sendraster_packbits` in `src/protocol.h`).
 - `FLAG_P700_INIT`: `rasterstart` uses the P700 variant (`1b 69 61 01`) instead of
   the default.
 - `FLAG_PLITE`: the model is in P-Lite mode, which this project does not drive.
 
-Set the flags to describe the model accurately even though the driver does not yet
-dispatch on them. They document the protocol the model needs once per-model
-dispatch lands.
+Flags describe encoding and raster-mode commands, not print support. The driver
+uses them only after resolving an explicitly supported model. P710BT has both
+`FLAG_RASTER_PACKBITS` and `FLAG_P700_INIT`; it also needs the model-specific
+extended page setup below. Sharing these flags does not enable another model.
+
+## The implemented P710BT command path
+
+P710BT metadata is `04f9:20af`, 128 dots, normal 180 dpi. Its page setup differs
+from PT-2730's legacy eight-byte `ESC i c` command:
+
+| Operation | Builder / command |
+| --- | --- |
+| Fresh-run preparation | `pt_cmd_invalidate`: 100 zero bytes, then `pt_cmd_init`: `1b 40`. Omit both when continuing a healthy held run. |
+| Raster mode | `pt_cmd_rasterstart` with `FLAG_P700_INIT`: `1b 69 61 01`. |
+| Automatic status | `pt_cmd_auto_status(o, true)`: `1b 69 21 00`. |
+| Extended page information | `pt_cmd_printinfo_extended`: `1b 69 7a 84 00 mm 00 r0 r1 r2 r3 page 00`. `r0..r3` are the validated destination page's row count, little-endian. |
+| Compression | `pt_cmd_compression(o, 2)`: `4d 02` selects TIFF PackBits. |
+| Raster line | `pt_cmd_sendraster_packbits` wraps each complete 16-byte head line as `47 11 00 0f` followed by those bytes, a single literal run. |
+| Feed margin | `pt_cmd_margin(o, 14)`: `1b 69 64 0e 00`. |
+
+The extended page command uses width-valid/recovery flags `84`, unspecified
+media kind, zero fixed-length and reserved fields. `page` is 0 for a freshly
+initialized printer run and 1 for subsequent pages, including the first page of
+an IPP batch continuing a healthy held run. Cross-batch indication and finishing
+were verified by the integrated physical gate; separate-label probes did not
+verify them. Normal resolution and finishing use the existing mode/advanced
+builders and batch lifecycle, without half-cut or cut-every-N commands.
+
+Direct USB geometry probes on 2026-10-12 used this setup with first-page
+indication 0, normal resolution, autocut, chain-off, and terminal EJECT. The
+operator confirmed complete 52-, 76-, and 120-dot rectangles on 9, 12, and 18 mm
+tape. The existing 32/52/76/120/128-dot table is shared by both supported paths;
+6 and 24 mm remain software/documentation coverage for P710BT. These observations
+establish usable geometry, not integrated finishing, continuation, or recovery
+certification. The change's validation summary records retained probe evidence
+and any unavailable files separately.
 
 ## Adding the entry
 
@@ -97,18 +132,18 @@ do not enable it merely by adding metadata.
 
 ## Caveats: recognized is not supported
 
-A new entry is **untested and not print-supported** until:
+A new entry only adds lookup metadata. Enabling another model requires an
+implemented protocol path, consistent queue/USB identity and status handling,
+software regressions, and an explicit supported-model gate change. PT-2730
+(`04f9:2041`) and P710BT (`04f9:20af`) are hardware-certified. P710BT's integrated
+gate covers 9/12/18 mm USB printing, finishing, continuation, and recovery;
+6/24 mm remain software-only. Recognition, pure command tests, and separate
+geometry probes alone do not certify another model.
 
-- The model is verified on real hardware. Only the PT-2730 (`04f9:2041`) is
-  hardware-certified. The status read, media detection, and print geometry are all
-  validated against it and nothing else.
-- For PackBits or P700 models (`FLAG_RASTER_PACKBITS`, `FLAG_P700_INIT`), per-model
-  flag dispatch exists in the driver. The current supported-model gate rejects
-  these models before output; it does not send them PT-2730 bytes.
-
-Until then a new row only adds lookup metadata. `pt_usb_supported_model` and the driver identity check must remain
-restricted to the implemented, validated print path, and rejected models must
-receive no output.
+`pt_usb_supported_model` and the driver identity check must remain restricted
+to these two implemented paths. Other catalog entries, including PackBits/P700
+models, remain unsupported and must receive no output. Do not broaden the gate
+based on flags or silently fall back to an attached model.
 
 ## Source of new PIDs
 

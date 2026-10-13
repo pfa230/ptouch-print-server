@@ -11,8 +11,10 @@ The Brother raster protocol and device table are reused from
 
 ## Capabilities
 
-Only the **Brother PT-2730** is print-supported and hardware-certified;
-other recognized models do not receive print output.
+**Brother PT-2730** remains the default supported, hardware-certified model.
+**PT-P710BT** is hardware-certified over USB on 9/12/18 mm tape, selected
+explicitly below. Its 6/24 mm coverage is software-only. Other recognized models do not
+receive print output.
 
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.
@@ -51,13 +53,18 @@ Three layers:
 ## Supported devices
 
 `src/tables.c` recognizes the P-touch USB ids below (transcribed from upstream
-`ptdevs[]`). **Only the PT-2730 is print-supported and hardware-certified.** Every
-other entry remains recognition metadata and is **not print-supported**: discovery
-reports it in diagnostics without offering a printable device. Per-model flag
-dispatch (PackBits, P700 init) does not exist yet. All known models are 180 dpi /
-128 px max. `PTOUCH_MODEL` defaults to `PT-2730`; unknown or unsupported values
-fail before discovery. Multiple matching PT-2730 units block printing as ambiguous,
-while a single unit can be unplugged and reattached without replacing its queue.
+`ptdevs[]`, plus PT-P710BT). Only PT-2730 and PT-P710BT have implemented print
+paths. All other entries remain recognition metadata: discovery reports them
+without offering a printable device. Shared protocol flags do not grant support.
+All known models are 180 dpi / 128 px max.
+
+`PTOUCH_MODEL` defaults to `PT-2730` when absent or empty. Select the new printer
+with `PTOUCH_MODEL=PT-P710BT`; unknown or unsupported values fail before discovery.
+The server creates one stable queue for the selected model and never falls back
+when it is absent. One of each supported model can coexist; two matching units
+of the selected model block printing as ambiguous. USB renumbering after replug
+does not replace the queue. Discovery names an attached but unselected printer
+and its required `PTOUCH_MODEL` value.
 
 | Model | USB id | flags | Print-supported |
 |-------|--------|-------|-----------------|
@@ -67,6 +74,7 @@ while a single unit can be unplugged and reattached without replacing its queue.
 | PT-1230PC (PLite) | 04f9:2030 | `PLITE` | recognized only |
 | PT-2430PC (PLite) | 04f9:2031 | `PLITE` | recognized only |
 | **PT-2730** | **04f9:2041** | `NONE` | **certified** |
+| **PT-P710BT** | **04f9:20af** | `RASTER_PACKBITS \| P700_INIT` | **certified on 9/12/18 mm tape** |
 | PT-E500 | 04f9:205f | `RASTER_PACKBITS` | recognized only |
 | PT-H500 | 04f9:205e | `RASTER_PACKBITS \| P700_INIT` | recognized only |
 | PT-P700 | 04f9:2061 | `RASTER_PACKBITS \| P700_INIT` | recognized only |
@@ -104,7 +112,7 @@ ctest --test-dir build-app --output-on-failure
 
 `Dockerfile` supplies the development dependencies; `Dockerfile.deploy` builds
 all targets and runs CTest before installing the app into the runtime image.
-These tests use no printer; physical behavior requires separate PT-2730 checks.
+These tests use no printer; physical behavior requires acceptance on the affected model.
 
 ### Printing notes for clients
 
@@ -208,16 +216,52 @@ Run state lives in memory. Restart during an unfinished run is unsupported;
 finish it deliberately first. Interrupted output requires printer power-cycle
 followed by server restart, as described below.
 
+The finishing contract and canonical 32/52/76/120/128-dot tape windows are shared
+by both implemented models. PT-2730 retains its legacy eight-byte print
+information and uncompressed rows. PT-P710BT uses `ESC i a` raster mode,
+automatic status notification, thirteen-byte `ESC i z` print information with
+the actual destination row count, a 14-dot feed margin, and TIFF PackBits rows.
+Its first page has indication 0 on a freshly initialized closed run; later
+pages and healthy cross-batch continuation use 1. Only a fresh P710BT run sends
+the 100-byte invalidation and initialization; continuation sends neither.
+Finalization still uses deferred FF or late chain-off/EJECT for both models.
+The P710BT integrated [hardware gate](tests/P710BT-ACCEPTANCE.md) passed all four
+finishing policies, held-run continuation, wrong-media rejection, offline queue
+recovery, and explicit uncertain-output recovery. It used 15 complete labels,
+including four operator-requested repeat labels. Direct geometry probes remain
+separate evidence; 6/24 mm have software coverage only.
+
 ## Configuration
 
 Cutting uses the job's standard finishing choice. `PTOUCH_PRECUT`,
 `PTOUCH_CUT_MODE`, and `PTOUCH_WIDTH_GUARD` are retired and ignored. Mandatory
 batch precut and strict geometry rejection are intrinsic; no replacement server
-knob is needed. `PTOUCH_MODEL` defaults to the supported PT-2730.
+knob is needed. `PTOUCH_MODEL` defaults to PT-2730; configure
+`PTOUCH_MODEL=PT-P710BT` for the P710BT USB path. This selects one queue, not
+all attached printers, and never enables another model as a fallback.
 
 `PTOUCH_DEVICE_URI` overrides device discovery with an explicit URI (e.g.
-`socket://127.0.0.1:9100`) for testing without a PT-2730; the printer registers
-but only connects on an actual print.
+`socket://127.0.0.1:9100`) for testing without USB hardware; queue identity and
+protocol still follow `PTOUCH_MODEL`, and the printer connects on an actual print.
+An explicit `ptouch://Brother/<model>` override must exactly match the configured
+supported model; conflicting or unsupported custom USB URIs fail before commands.
+
+### USB diagnostics
+
+`ptouch-app probe` enumerates only the custom USB scheme and reports whether
+exactly one selected VID/PID is present. It never opens the printer or sends
+commands. Set `PTOUCH_MODEL` consistently for diagnostics and the server:
+
+```sh
+PTOUCH_MODEL=PT-P710BT ptouch-app probe
+```
+
+`PTOUCH_MODEL=PT-P710BT ptouch-app smoke` opens the selected printer and sends
+initialization (`ESC @`), then checks that those bytes reached USB. Use it only
+on a known closed tape run: initialization can destroy a held run. It is not a
+read-only status preflight or the isolated IPP/socket image smoke used in CI.
+Neither diagnostic chooses a different attached model when selection is absent
+or ambiguous.
 
 ## Deploy
 

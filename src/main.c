@@ -41,7 +41,9 @@ static int probe_cb(const char *base, int num_options, cups_option_t *options,
     printf("probing ptouch:// (CUSTOM_LOCAL only)...\n");
     papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, probe_print_cb, NULL, probe_error_cb, NULL);
     printf("probe done\n");
-    printf("PRESENT 04f9:2041 = %s\n", pt_usb_present(0x04f9, 0x2041) ? "yes" : "no");
+    const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
+    printf("PRESENT %04x:%04x = %s\n", model->vid, model->pid,
+           pt_usb_present(model->vid, model->pid) ? "yes" : "no");
     return 0;
 }
 
@@ -74,14 +76,18 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
 
     papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
 
+    const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
+    char uri[80], id[100];
+    pt_usb_format_uri(model, uri, sizeof uri);
+    pt_usb_format_id(model, id, sizeof id);
+
     /* Test override: create the printer on an explicit URI (e.g. a socket sink)
      * instead of enumerating ptouch://. Lets the geometry gate run against
-     * socket://127.0.0.1:9100 with no PT-2730 involved (no physical printing). */
+     * socket://127.0.0.1:9100 with no USB printer involved (no physical printing). */
     const char *override_uri = getenv("PTOUCH_DEVICE_URI");
     if (override_uri && *override_uri) {
         pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
-                                                "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;",
-                                                override_uri);
+                                                id, override_uri);
         papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
                  "%s printer for %s (PTOUCH_DEVICE_URI override)",
                  p ? "Created" : "FAILED to create", override_uri);
@@ -90,17 +96,15 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
 
     /* Always create the configured supported model's stable queue. Discovery
      * supplies diagnostics, never a first-device fallback or a different model. */
-    const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
     papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, discovery_cb, NULL, discovery_error_cb, sys);
     ssize_t matches = pt_usb_count(model->vid, model->pid);
     pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
-                                           "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;",
-                                           "ptouch://Brother/PT-2730");
+                                           id, uri);
     if (p && matches != 1)
         papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
     papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-             "%s printer for ptouch://Brother/PT-2730 (%zd matching USB devices)",
-             p ? "Created" : "FAILED to create", matches);
+             "%s printer for %s (%d matching USB devices)",
+             p ? "Created" : "FAILED to create", uri, (int)matches);
     return sys;
 }
 
@@ -122,11 +126,13 @@ static void smoke_err_cb(const char *message, void *data)
 static int run_smoke(void)
 {
     pt_usb_register();
-    const char *uri = "ptouch://Brother/PT-2730";
+    char uri[80];
     const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
+    pt_usb_format_uri(model, uri, sizeof uri);
     ssize_t count = pt_usb_count(model->vid, model->pid);
     if (count != 1) {
-        fprintf(stderr, "smoke: expected one PT-2730, found %zd (none or ambiguous)\n", count);
+        papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, discovery_cb, NULL, smoke_err_cb, NULL);
+        fprintf(stderr, "smoke: expected one %s, found %zd (none or ambiguous)\n", model->name, count);
         return 2;
     }
     pappl_device_t *dev = papplDeviceOpen(uri, "smoke", smoke_err_cb, NULL);
@@ -149,9 +155,17 @@ static int run_smoke(void)
 int main(int argc, char *argv[])
 {
     const char *configured = getenv("PTOUCH_MODEL");
-    if (!pt_usb_supported_model(configured)) {
-        fprintf(stderr, "PTOUCH_MODEL=%s is %s; only PT-2730 is print-supported\n",
+    const pt_dev *model = pt_usb_supported_model(configured);
+    if (!model) {
+        fprintf(stderr, "PTOUCH_MODEL=%s is %s; only PT-2730 and PT-P710BT are print-supported\n",
                 configured, pt_lookup_name(configured) ? "recognized but unsupported" : "unknown");
+        return EXIT_FAILURE;
+    }
+    const char *override_uri = getenv("PTOUCH_DEVICE_URI");
+    if (override_uri && !strncmp(override_uri, "ptouch://", 9) &&
+        pt_usb_model_from_uri(override_uri) != model) {
+        fprintf(stderr, "PTOUCH_DEVICE_URI=%s conflicts with PTOUCH_MODEL=%s\n",
+                override_uri, model->name);
         return EXIT_FAILURE;
     }
     if (argc >= 2 && strcmp(argv[1], "smoke") == 0)
