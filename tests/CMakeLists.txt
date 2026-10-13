@@ -1,3 +1,6 @@
+# Keep test assertions active without changing production compiler options.
+add_compile_options(-UNDEBUG)
+
 add_executable(test_tables test_tables.c)
 target_link_libraries(test_tables ptcore)
 add_test(NAME tables COMMAND test_tables)
@@ -21,8 +24,6 @@ add_test(NAME cutter COMMAND test_cutter)
 # Test-only command-sequence probe; capture generation needs only the core.
 add_executable(ptouch-cut-probe cut_probe.c)
 target_link_libraries(ptouch-cut-probe PRIVATE ptcore)
-find_package(Python3 COMPONENTS Interpreter)
-if(Python3_Interpreter_FOUND)
-  add_test(NAME cut_probe_capture COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_probe.py $<TARGET_FILE:ptouch-cut-probe>)
-endif()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME cut_probe_capture COMMAND ${Python3_EXECUTABLE}
+  ${CMAKE_CURRENT_SOURCE_DIR}/test_cut_probe.py $<TARGET_FILE:ptouch-cut-probe>)

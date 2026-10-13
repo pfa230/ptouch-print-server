@@ -3,25 +3,13 @@
 
 #include <pappl/pappl.h>
 
-/* Private raster destination type (#40). Job processing looks for a filter to
- * driver_data.format BEFORE one to image/pwg-raster, so giving the driver its
- * own destination type is what lets pt_filter_png replace PAPPL's built-in PNG
- * filter (re-registering image/png -> image/pwg-raster is silently ignored).
- * It is a filter target only, never a printable format: raw jobs in this type
- * are faulted. */
-#define PT_RASTER_FORMAT "image/vnd.ptouch-raster"
-
 /* Roll length range, in 1/100 mm, as advertised in media-col. */
 #define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
 #define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
 
-/* #43: make media-default describe the tape that is actually loaded, before the
- * caller builds the page geometry from it. A no-op unless the printer is on our
- * ptouch:// scheme and its media is suspect (never confirmed by a live read, or
- * the printer is offline/media-empty), so healthy jobs pay nothing. Returns false
- * when suspect media could not be resolved within the barrier's budget: the job
- * has already been faulted and the caller must not print. Call it with the
- * device open and owned by the job. */
+/* Confirm clean live tape before geometry is constructed, using a bounded
+ * status query on the job-owned USB handle. Non-USB test transports retain
+ * configured media. Uncertain output blocks every transport until recovery. */
 bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device);
 
 /* Fill driver_data for a P-touch printer (PAPPL pappl_pr_driver_cb_t). */

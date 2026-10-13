@@ -1,0 +1,3 @@
+# Preserve verbatim dependency patch context and recorded tool output.
+patches/*.patch -whitespace
+openspec/changes/archive/**/evidence/*.txt -whitespace

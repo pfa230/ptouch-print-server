@@ -1,86 +1,68 @@
-# Finishing-option verification
+# Finishing verification
 
-The PAPPL-only `driver_finishings` CTest target uses real PAPPL 1.4.11 objects
-and IPP Create-Job requests. Its transport fixture injects raster, FF, and EJECT
-write failures and fragmented printer status packets. It verifies that buffered
-acceptance cannot hide those failures and that repeated cleanup emits nothing.
+The contract is one IPP job per batch, four policies, mandatory first-label
+precut, and no discarded leaders during healthy continuation. Registered enum
+choices are none (3), trim (11), trim-after-pages (60), and trim-after-job (63).
+Chain-only uses the implementation-defined ptouch-chain template through
+standard finishings-col. Collection no-value selects none.
 
-The same target uploads generated PNGs through IPP Send-Document, releases them
-through PAPPL scheduling, and captures output using PAPPL's actual TCP device
-scheme. Only the printer's online media/status callback is fixed in this test;
-production status behavior is exercised separately with injected USB presence
-and tape responses.
+## Software checks
 
-Verified scenarios:
-
-- omitted finishings uses the advertised none default;
-- none and trim enum choices and finishings-col templates reach the driver;
-- three none copies end with three FFs and no EJECT or autocut;
-- three trim copies end with two FFs and one EJECT;
-- no-cut state survives a handle close/reopen and a gap beyond the old idle timer;
-- canceled, malformed, and unsupported followers do not finalize a no-cut run;
-- two jobs already Pending before printing both finalize when both request trim;
-- legacy PTOUCH_CUT_MODE cannot override either explicit choice;
-- partial status reads consume printing, print-completed, then receiving-ready;
-- detected printer error, malformed status, and cancellation fail readiness;
-- state exhaustion refuses a no-cut job before output;
-- USB disappearance clears stale run/media state, and the existing refresh path
-  consumes an old phase notification, then confirms 24 mm from the requested
-  snapshot before creating the next page's nominal-width geometry;
-- strict width mismatch and unsupported raw raster input remain rejected.
-
-Run in the deploy build stage, which provides PAPPL/libusb/libpng:
+Run the full build in the pinned container environment:
 
 ```sh
-cmake -S . -B build
+cmake -S . -B build -DPTOUCH_CORE_ONLY=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The 2026-10-11 run passed all six container CTest suites. The host's seven
-protocol-capture tests also passed. The complete deploy image built and its
-localhost IPP smoke query reported supported finishings none/trim and default
-none. These are software results, not certification of physical cuts or leaders.
-PT-2730 validation remains recorded separately in CUT-PROBE.md and the OpenSpec
-tasks, and integration waits for that gate.
+The hardware-free cutter and capture suites check the two policy flags and
+observable command order, including one/three labels and the eight-label gate.
+They use no copy-sized operation array or planner API. Historical diagnostic
+probe sequences remain test-local.
 
-The real-USB candidate test on 2026-10-11 completed three trim copies with zero
-printer error bits and a receiving-ready notification consumed after each copy.
-Physical output observations and the remaining hardware matrix are pending; see
-CUT-PROBE.md.
+Real IPP driver tests exercise actual PNG copies and unknown-count raster labels,
+all four presets, aliases, defaults, explicit collections, supported attributes,
+and rejected/conflicting requests. A counting sink verifies 65 and 999 PNG copies;
+streaming formats advertise one copy. Failure fixtures cover raster, FF, EJECT,
+decode, cancellation, and fragmented receiving-ready. Repeated cleanup must
+emit nothing; clean status/reopen must not clear uncertain output.
 
+The minimal PAPPL finishing fixture isolates advertised-attribute acceptance,
+legacy-driver compatibility, and atomic enum/collection default updates. The
+raster fixture covers malformed first/next headers, incomplete rows/pages, and
+negative input callbacks before successful end-job cleanup.
 
-On 2026-10-12 the observed precut-disabled three-copy test exposed joined final
-two copies. A failing cutter regression and local correction keep autocut off
-for the first copy and on for later copies, including the last. All six container
-suites and seven host capture tests pass; the user observed all three corrected
-copies cut apart, with leading tape attached to the first copy.
+`python3 scripts/smoke-image.py IMAGE` runs the built deploy image, submits real
+IPP PNG jobs for all four policies and the omitted default, and captures actual
+socket output. It checks explicit 50 mm pages, copies, public capabilities, and
+malformed-image failure without USB access. This requires Docker and ipptool.
 
-The CI smoke's terse ipptool command exited zero and printed PASS, but its grep
-required a successful-ok string only printed in verbose mode. Its final log grep
-could also fail before the container's log follower emitted startup lines. The
-local workflow now uses the IPP test's exit status, prints a verbose final query,
-and keeps container logs as diagnostics. The corrected shell block passed locally
-with bash -e -o pipefail. The published workflow subsequently passed GitHub CI
-on commit 688ffd4 (run 38278139208).
+`scripts/check-cups.py /path/to/ptouch-app` runs inside an isolated container
+with CUPS, cups-filters, Ghostscript, ipptool, and Pillow. It creates an ordinary
+driverless queue, submits PNG/JPEG, two-label PDFs, and two copies of a PDF with registered finishing
+choices, queues two jobs while the socket printer is offline, then captures their
+resumption. It also checks standard chain collection submission and that saving
+unrelated fields in the existing Web UI preserves trim/final-only defaults.
+Custom-size cases cover CUPS width rounding with fitting explicit-margin content,
+oversized rejection without output, and exact standard media-col dimensions.
 
-The 2026-10-12 hardware gate is now complete: the user observed explicit
-none/none/trim with idle gaps, separated trim copies with precut enabled and
-disabled, approximately one-inch frame length, and successful printing and
-cutting of a queued trim job after switching the printer on. See CUT-PROBE.md
-for the observations and logs. The final deploy image also built successfully
-and passed the corrected workflow smoke locally. This validates publication
-of the final correction.
+The change's validation.md records execution results separately from physical
+printer observations.
 
-Final review found that skipping all idle status polling would make cassette
-width changes invisible until USB disconnection. A new regression failed
-against that implementation. The local correction requests status without
-ESC @ while a run remains open, both during idle polling and before creating
-the next PNG job's geometry. Tests confirm same-width continuation, changed
-width publication and chain clearing, and empty cassette detection, with only
-the three-byte status request on the wire. All six CTest suites pass with the
-correction. The full deploy image built and passed the corrected smoke. The
-user confirmed the expected joined none/none strip and separately finalized
-trim label after status queries and idle gaps, completing physical validation
-before publication. The follow-up review reported no remaining actionable
-defects.
+## Physical evidence
+
+The approved eight-label direct-protocol gate passed on the PT-2730 with 24 mm
+tape: chain:2 then each:2, and none:2 then end:2, with an observation/idle gap at
+each batch boundary. The operator confirmed initial leaders cut off, expected
+internal/final cuts, held ends released by the following batch, and no discarded
+inter-batch leaders. See CUT-PROBE.md for exact commands and the change's
+validation.md for status packets, captures, and operator observations.
+
+The separately authorized integrated acceptance also passed all 21 labels on
+12 mm tape, including PNG/raster batches, cassette change, offline continuation,
+uncertain-output blocking, and power-cycle/server-restart recovery without ghost
+output. The operator confirmed length/orientation markers and all four cut
+policies. Other tape widths have software coverage only, except the 24 mm direct
+protocol gate. See HARDWARE-ACCEPTANCE.md and the change's validation.md. The
+deployed service image has not been replaced.

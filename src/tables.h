@@ -2,6 +2,7 @@
 #define PT_TABLES_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Per-model protocol flags (from upstream ptouch-print). */
 #define FLAG_NONE            0x00u
@@ -26,5 +27,13 @@ const pt_dev *pt_lookup_name(const char *name);
 
 /* Imageable px for a tape width in mm; 0 if unknown. */
 int pt_tape_px(int mm);
+
+/* PT-2730's canonical physical window at 180 dpi. right_px is exclusive;
+ * margin_centimm is the physical minimum, with pixel-aligned published margins. */
+typedef struct {
+    int nominal_px, imageable_px, left_px, right_px, margin_centimm;
+    int left_margin_centimm, right_margin_centimm;
+} pt_geometry;
+bool pt_tape_geometry(int tape_mm, pt_geometry *out);
 
 #endif /* PT_TABLES_H */

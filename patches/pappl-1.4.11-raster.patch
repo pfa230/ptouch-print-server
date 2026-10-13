@@ -1,0 +1,289 @@
+--- a/pappl/job-process.c
++++ b/pappl/job-process.c
+@@ -586,6 +586,7 @@
+ 			y;		// Current line
+   int			job_pages_per_set;
+ 					// "job-pages-per-set" value, if any
++  bool                  started = false; // Started driver callbacks
+   unsigned		next_copy;	// Next copy boundary
+ 
+ 
+@@ -598,7 +599,7 @@
+   // Open the raster stream...
+   if ((ras = cupsRasterOpenIO((cups_raster_cb_t)httpRead, client->http, CUPS_RASTER_READ)) == NULL)
+   {
+-    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to open raster stream from client - %s", cupsGetErrorString());
++    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to open raster stream from client - %s", cupsRasterGetErrorString());
+     job->state = IPP_JSTATE_ABORTED;
+     goto complete_job;
+   }
+@@ -606,7 +607,7 @@
+   // Prepare options...
+   if (!cupsRasterReadHeader(ras, &header))
+   {
+-    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to read raster stream from client - %s", cupsGetErrorString());
++    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to read raster stream from client - %s", cupsRasterGetErrorString());
+     job->state = IPP_JSTATE_ABORTED;
+     goto complete_job;
+   }
+@@ -636,6 +637,8 @@
+     goto complete_job;
+   }
+ 
++  started = true;
++
+   // Print pages...
+   do
+   {
+@@ -652,7 +655,13 @@
+     papplJobDeletePrintOptions(options);
+     options = papplJobCreatePrintOptions(job, (unsigned)job->impressions, header.cupsBitsPerPixel > 8);
+ 
+-    if (header.cupsWidth == 0 || header.cupsHeight == 0 || (header.cupsBitsPerColor != 1 && header.cupsBitsPerColor != 8) || header.cupsColorOrder != CUPS_ORDER_CHUNKED || (header.cupsBytesPerLine != ((header.cupsWidth * header.cupsBitsPerPixel + 7) / 8)))
++    if (header.cupsWidth == 0 || header.cupsHeight == 0 ||
++        header.cupsWidth > 0x00ffffff || header.cupsHeight > 0x00ffffff ||
++        header.HWResolution[0] == 0 || header.HWResolution[1] == 0 ||
++        header.cupsBitsPerPixel == 0 || header.cupsBitsPerPixel > 32 ||
++        (header.cupsBitsPerColor != 1 && header.cupsBitsPerColor != 8) ||
++        header.cupsColorOrder != CUPS_ORDER_CHUNKED ||
++        header.cupsBytesPerLine != ((header.cupsWidth * header.cupsBitsPerPixel + 7) / 8))
+     {
+       papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Bad raster data seen.");
+       papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_FORMAT_ERROR, PAPPL_JREASON_NONE);
+@@ -668,8 +677,78 @@
+       break;
+     }
+ 
+-    if (options->header.cupsBitsPerPixel >= 8 && header.cupsBitsPerPixel >= 8)
+-      options->header = header;		// Use page header from client
++
++    if (options->header.cupsBitsPerPixel == 1 &&
++        ((header.cupsBitsPerPixel != 1 && header.cupsBitsPerPixel != 8) ||
++         (header.cupsColorSpace != CUPS_CSPACE_K && header.cupsColorSpace != CUPS_CSPACE_W && header.cupsColorSpace != CUPS_CSPACE_SW)))
++    {
++      papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unsupported raster conversion to 1-bit output.");
++      papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
++      job->state = IPP_JSTATE_ABORTED;
++      break;
++    }
++
++    // A submitted resolution must be one of this driver's supported pairs.
++    for (x = 0; x < (unsigned)printer->driver_data.num_resolution; x ++)
++    {
++      if (header.HWResolution[0] == (unsigned)printer->driver_data.x_resolution[x] &&
++          header.HWResolution[1] == (unsigned)printer->driver_data.y_resolution[x])
++        break;
++    }
++    if (x == (unsigned)printer->driver_data.num_resolution)
++    {
++      papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unsupported raster resolution.");
++      papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
++      job->state = IPP_JSTATE_ABORTED;
++      break;
++    }
++
++    // Keep the page geometry even when converting grayscale to device bits.
++    // Copying only headers with >=8-bit output used the default size otherwise.
++    {
++      cups_page_header_t output = options->header;
++      ipp_attribute_t *attr = ippFindAttribute(job->attrs, "media", IPP_TAG_ZERO);
++      ipp_t *media_col = ippGetCollection(ippFindAttribute(job->attrs, "media-col", IPP_TAG_BEGIN_COLLECTION), 0);
++      ipp_t *size = ippGetCollection(ippFindAttribute(media_col, "media-size", IPP_TAG_BEGIN_COLLECTION), 0);
++      double width = 2540.0 * header.cupsWidth / header.HWResolution[0];
++      double length = 2540.0 * header.cupsHeight / header.HWResolution[1];
++      // Media import prefers a concrete size-name over nested dimensions.
++      bool named_media = ippFindAttribute(media_col, "media-size-name", IPP_TAG_ZERO) != NULL;
++      bool explicit_width = attr || (named_media && options->media.size_width > 0) || ippFindAttribute(size, "x-dimension", IPP_TAG_INTEGER);
++      bool explicit_length = attr || (named_media && options->media.size_length > 0) || ippFindAttribute(size, "y-dimension", IPP_TAG_INTEGER);
++
++      if (width > INT_MAX - 1.0 || length > INT_MAX - 1.0 ||
++          (explicit_width && (width < options->media.size_width - 2540.0 / header.HWResolution[0] || width > options->media.size_width + 2540.0 / header.HWResolution[0])) ||
++          (explicit_length && (length < options->media.size_length - 2540.0 / header.HWResolution[1] || length > options->media.size_length + 2540.0 / header.HWResolution[1])))
++      {
++        papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Raster page contradicts explicit job media dimensions.");
++        papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
++        job->state = IPP_JSTATE_ABORTED;
++        break;
++      }
++
++      options->header = header;
++      if (output.cupsBitsPerPixel == 1 && header.cupsBitsPerPixel <= 8)
++      {
++        options->header.cupsBitsPerColor = output.cupsBitsPerColor;
++        options->header.cupsBitsPerPixel = output.cupsBitsPerPixel;
++        options->header.cupsColorSpace = output.cupsColorSpace;
++        options->header.cupsNumColors = output.cupsNumColors;
++        options->header.cupsBytesPerLine = (header.cupsWidth + 7) / 8;
++      }
++      else if (header.cupsBitsPerPixel < 8 && output.cupsBitsPerPixel != header.cupsBitsPerPixel)
++      {
++        papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unsupported raster bit-depth conversion.");
++        papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
++        job->state = IPP_JSTATE_ABORTED;
++        break;
++      }
++
++      if (!explicit_width)
++        options->media.size_width = (int)(width + 0.5);
++      if (!explicit_length)
++        options->media.size_length = (int)(length + 0.5);
++    }
+ 
+     if (!(printer->driver_data.rstartpage_cb)(job, options, job->printer->device, page))
+     {
+@@ -714,7 +793,7 @@
+ 
+     for (y = 0; !job->is_canceled && y < header.cupsHeight && y < options->header.cupsHeight; y ++)
+     {
+-      if (cupsRasterReadPixels(ras, pixels, header.cupsBytesPerLine))
++      if (cupsRasterReadPixels(ras, pixels, header.cupsBytesPerLine) == header.cupsBytesPerLine)
+       {
+         if (header.cupsBitsPerPixel == 8 && options->header.cupsBitsPerPixel == 1)
+         {
+@@ -765,55 +844,41 @@
+ 	      *lineptr = byte;
+ 	  }
+ 
+-          (printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, line);
++          if (!(printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, line))
++          {
++            job->state = IPP_JSTATE_ABORTED;
++            break;
++          }
+         }
+         else
+-          (printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, pixels);
+-      }
+-      else
+-        break;
+-    }
+-
+-    if (!job->is_canceled && y < header.cupsHeight)
+-    {
+-      // Discard excess lines from client...
+-      while (y < header.cupsHeight)
+-      {
+-        cupsRasterReadPixels(ras, pixels, header.cupsBytesPerLine);
+-        y ++;
+-      }
+-    }
+-    else
+-    {
+-      // Pad missing lines with whitespace...
+-      if (header.cupsBitsPerPixel == 8 && options->header.cupsBitsPerPixel == 1)
+-      {
+-        memset(line, 0, options->header.cupsBytesPerLine);
+-
+-        while (y < options->header.cupsHeight)
+         {
+-	  (printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, line);
+-          y ++;
++          if (header.cupsBitsPerPixel == 1 && header.cupsColorSpace != options->header.cupsColorSpace)
++          {
++            for (x = 0; x < header.cupsBytesPerLine; x ++)
++              pixels[x] ^= 255;
++          }
++          if (!(printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, pixels))
++          {
++            job->state = IPP_JSTATE_ABORTED;
++            break;
++          }
+         }
+       }
+       else
+       {
+-        if (header.cupsColorSpace == CUPS_CSPACE_K || header.cupsColorSpace == CUPS_CSPACE_CMYK)
+-          memset(pixels, 0x00, header.cupsBytesPerLine);
+-	else
+-          memset(pixels, 0xff, header.cupsBytesPerLine);
+-
+-        while (y < options->header.cupsHeight)
+-        {
+-	  (printer->driver_data.rwriteline_cb)(job, options, job->printer->device, y, pixels);
+-          y ++;
+-        }
++        papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Incomplete raster page at row %u.", y);
++        papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_FORMAT_ERROR, PAPPL_JREASON_NONE);
++        job->state = IPP_JSTATE_ABORTED;
++        break;
+       }
+     }
+ 
+     free(pixels);
+     free(line);
+ 
++    if (job->state == IPP_JSTATE_ABORTED || job->is_canceled)
++      break;
++
+     if (!(printer->driver_data.rendpage_cb)(job, options, job->printer->device, page))
+     {
+       job->state = IPP_JSTATE_ABORTED;
+@@ -842,19 +907,33 @@
+   }
+   while (cupsRasterReadHeader(ras, &header));
+ 
++  // CUPS distinguishes a malformed/partial next header from clean stream EOF.
++  if (job->state != IPP_JSTATE_ABORTED && !job->is_canceled)
++  {
++    const char *error = cupsRasterGetErrorString();
++    if (error && *error)
++    {
++      papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to finish raster stream - %s", error);
++      papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_FORMAT_ERROR, PAPPL_JREASON_NONE);
++      job->state = IPP_JSTATE_ABORTED;
++    }
++  }
++
+   if (next_copy == 0)
+   {
+     // Not tracking copies so record this as a single completed copy...
+     papplJobSetCopiesCompleted(job, 1);
+   }
+ 
+-  if (!(printer->driver_data.rendjob_cb)(job, options, job->printer->device))
+-    job->state = IPP_JSTATE_ABORTED;
+-  else if (header_pages == 0 && job_pages_per_set == 0)
++  if (job->state != IPP_JSTATE_ABORTED && !job->is_canceled && header_pages == 0 && job_pages_per_set == 0)
+     papplJobSetImpressions(job, (int)page);
+ 
+   complete_job:
+ 
++  // Cleanup sees aborted/canceled state and cannot finalize buffered output.
++  if (started && !(printer->driver_data.rendjob_cb)(job, options, job->printer->device))
++    job->state = IPP_JSTATE_ABORTED;
++
+   papplJobDeletePrintOptions(options);
+ 
+   if (httpGetState(client->http) == HTTP_STATE_POST_RECV)
+--- a/pappl/job-filter.c
++++ b/pappl/job-filter.c
+@@ -543,6 +543,9 @@
+       }
+     }
+ 
++    if (job->is_canceled || job->state != IPP_JSTATE_PROCESSING)
++      goto abort_job;
++
+     // Trailing blank space...
+     memset(line, white, options->header.cupsBytesPerLine);
+     for (; y < (int)options->header.cupsHeight; y ++)
+@@ -565,7 +568,8 @@
+     papplJobSetCopiesCompleted(job, 1);
+   }
+ 
+-  // End the job...
++  // End the job only once, including when the callback itself fails.
++  started = false;
+   if (!(driver_data.rendjob_cb)(job, options, device))
+   {
+     papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "Unable to end raster job.");
+@@ -580,6 +584,9 @@
+   // Abort the job...
+   abort_job:
+ 
++  if (!job->is_canceled)
++    job->state = IPP_JSTATE_ABORTED;
++
+   if (started)
+     (driver_data.rendjob_cb)(job, options, device);
+ 

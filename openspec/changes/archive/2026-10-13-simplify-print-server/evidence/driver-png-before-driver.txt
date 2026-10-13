@@ -1,0 +1,13 @@
+Internal ctest changing into directory: /results/build
+Test project /results/build
+    Start 1: driver_finishings
+1/1 Test #1: driver_finishings ................Subprocess aborted***Exception:   1.32 sec
+test_driver: /src/tests/test_driver.c:62: dev_write: Assertion `papplPrinterGetReasons(poll_during_job) == before && usb_reads == reads' failed.
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   1.32 sec
+
+The following tests FAILED:
+	  1 - driver_finishings (Subprocess aborted)

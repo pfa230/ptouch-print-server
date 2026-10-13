@@ -1,8 +1,9 @@
 # Adding a P-touch model
 
 This guide explains how to add a Brother P-touch model to the device table. A new
-entry makes the model **recognized and discoverable**. It does **not** make it
-print-supported. See the caveats at the end.
+entry makes the model **recognized in metadata**. Discovery and printing remain
+restricted to the explicitly supported PT-2730. A table row does not grant
+print support. See the support gate below.
 
 ## The `pt_dev` fields
 
@@ -76,7 +77,9 @@ dispatch lands.
 3. Rebuild and run the core tests:
 
    ```bash
-   cmake -S . -B build && cmake --build build && ctest --test-dir build
+   cmake -S . -B build-core -DPTOUCH_CORE_ONLY=ON
+   cmake --build build-core
+   ctest --test-dir build-core --output-on-failure
    ```
 
 ## Hard rule: do not add wide-head models yet
@@ -87,14 +90,10 @@ dispatch lands.
 The print path is fixed at **16 bytes / 128 dots**. `pt_pack_line` and
 `pt_pack_window` (`src/raster.h`) pack into a 16-byte line.
 
-Note this is no longer a simple "reject anything wider" check. Since media is
-advertised at the nominal tape width with real margins (ADR-0005), `cupsWidth` is
-the **full page** width - 170 px for 24 mm tape - and `r_writeline` extracts the
-printable window `[left, left + win)` and centres it in the head, clamping `win`
-to 128. So a wide-head model would not fail loudly; it would silently print only
-the middle 128 dots of its page. Adding one requires generalizing the packing
-width, the clamp in `r_writeline`, and the `px > 128` eligibility test in
-`media_col_for` together.
+The supported-model gate rejects other models before discovery or print output,
+including models with wider heads. Supporting one requires a validated protocol,
+generalized packing and imageable geometry, and an explicit support-gate change;
+do not enable it merely by adding metadata.
 
 ## Caveats: recognized is not supported
 
@@ -104,11 +103,12 @@ A new entry is **untested and not print-supported** until:
   hardware-certified. The status read, media detection, and print geometry are all
   validated against it and nothing else.
 - For PackBits or P700 models (`FLAG_RASTER_PACKBITS`, `FLAG_P700_INIT`), per-model
-  flag dispatch exists in the driver. Today the print callbacks emit PT-2730
-  protocol (`FLAG_NONE`) unconditionally, so a flagged model would receive the
-  wrong byte stream.
+  flag dispatch exists in the driver. The current supported-model gate rejects
+  these models before output; it does not send them PT-2730 bytes.
 
-Until then a new row only adds discovery and metadata.
+Until then a new row only adds lookup metadata. `pt_usb_supported_model` and the driver identity check must remain
+restricted to the implemented, validated print path, and rejected models must
+receive no output.
 
 ## Source of new PIDs
 

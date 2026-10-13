@@ -1,30 +1,36 @@
-# 4. Strict width guard: reject size mismatches, never scale silently
+# 4. Strict tape and PNG content geometry
 
 **Status:** Accepted
 
 ## Context
 
-A client can request a media width that does not match the tape physically loaded. Printing anyway
-produces a mis-sized or clipped label, silently.
+A client can select a page width that differs from the physical tape. A matching
+page width also does not prove that a centered PNG fits the printable window:
+PAPPL can clip source pixels while the old page-width guard accepts the job.
 
 ## Decision
 
-Reject. If the job's cross-tape width does not match the loaded tape, fault the job before any raster
-is written, with `document-unprintable-error` and a message naming both widths.
+Reject page/tape width mismatches before raster, using confirmed loaded media.
+Use the shared `pt_tape_geometry` definition for publication and the canonical
+printable window. There is no configurable width-recovery policy. Custom media accepts the
+advertised ±0.01 mm rounding tolerance around a nominal tape width; the physical
+window remains fixed and a different cassette still fails before raster.
 
-`PTOUCH_WIDTH_GUARD` selects the policy; only `strict` is implemented and it is the default. Any
-other value logs that it is unimplemented and falls back to strict, so a mismatch is never silently
-accepted.
+At `print-scaling=none`, preflight the oriented PNG's physical content before
+calling PAPPL's renderer. Accept an imageable-width design that fits the page.
+Accept a nominal-width canvas only after verifying that every pixel outside the
+physical window is white, then remove those blank margins before placement.
+Reject oversized cross-tape content and content exceeding an explicit page's
+length instead of silently clipping it. Preserve orientation and square DPI;
+no DPI means 180 dpi. JPEG keeps PAPPL's standard placement path.
 
 ## Consequences
 
-- A wrong-tape job fails visibly instead of wasting tape on an unreadable label.
-- The guard must compare like with like. This bit us twice: ADR-0005 changed what `cupsWidth` means,
-  and the live-tape override in the same function was not updated, so it compared imageable px
-  against full-page px and faulted correct jobs.
-- Clients are expected to preflight with `media-ready`.
+Wrong tape and oversized 1:1 PNGs fail visibly without page raster. Explicit
+standard scaling remains distinct from a server-selected recovery policy.
+Clients can use `media-ready` to design for the actual tape and margins.
 
 ## Alternatives considered
 
-- **`fit` mode** (scale or crop to the loaded tape). Deferred as issue #35 and later closed as not
-  needed: for labels, a visible error beats an unreadable label.
+A server-selected fit/crop fallback would change the design's physical size or
+lose content without the client's instruction. Keep strict rejection instead.
