@@ -33,10 +33,17 @@ legacy-driver compatibility, and atomic enum/collection default updates. The
 raster fixture covers malformed first/next headers, incomplete rows/pages, and
 negative input callbacks before successful end-job cleanup.
 
-`python3 scripts/smoke-image.py IMAGE` runs the built deploy image, submits real
-IPP PNG jobs for all four policies and the omitted default, and captures actual
+`python3 scripts/smoke-image.py IMAGE --model PT-2730` and the same command with
+`--model PT-P710BT` run the built deploy image, submit real
+IPP PNG jobs for all four policies and the omitted default, and capture actual
 socket output. It checks explicit 50 mm pages, copies, public capabilities, and
 malformed-image failure without USB access. This requires Docker and ipptool.
+
+Production-driver tests execute the same finishing and failure fixtures for both
+models. Length-aware P710BT decoding checks TIFF PackBits rows, actual page
+heights, notification, feed margin, and first/subsequent physical-run page flags.
+PT-2730 continues to use legacy setup and raw rows, with no P710BT-only commands.
+The common deferred-print and closed/open/uncertain lifecycle remains unchanged.
 
 `scripts/check-cups.py /path/to/ptouch-app` runs inside an isolated container
 with CUPS, cups-filters, Ghostscript, ipptool, and Pillow. It creates an ordinary
@@ -51,6 +58,17 @@ The change's validation.md records execution results separately from physical
 printer observations.
 
 ## Physical evidence
+
+P710BT integrated acceptance passed on 2026-10-13 under
+[P710BT-ACCEPTANCE.md](P710BT-ACCEPTANCE.md): 15 complete labels including four
+operator-requested repeats, all four policies, healthy continuation, unknown-count
+mixed lengths, strict wrong-media rejection, USB-only offline resumption, and
+button-power-cycle/server-restart recovery without replay. Physical geometry
+was checked on 9/12/18 mm; 6/24 mm remain software-only. Every command capture
+matches its socket reference after removing status requests. The candidate was
+removed; the original service's image/configuration remains unchanged.
+
+The remaining evidence below concerns PT-2730.
 
 The approved eight-label direct-protocol gate passed on the PT-2730 with 24 mm
 tape: chain:2 then each:2, and none:2 then end:2, with an observation/idle gap at

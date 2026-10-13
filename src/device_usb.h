@@ -10,6 +10,11 @@
 /* NULL/empty selects the default; recognized models without a print path fail. */
 const pt_dev *pt_usb_supported_model(const char *model);
 
+/* Exact supported URI resolution and synthetic identity; no hardware reads. */
+const pt_dev *pt_usb_model_from_uri(const char *uri);
+void pt_usb_format_uri(const pt_dev *model, char *buffer, size_t size);
+void pt_usb_format_id(const pt_dev *model, char *buffer, size_t size);
+
 /* Exact supported model URI; test/network transports never use USB data. */
 bool pt_usb_is_uri(const char *uri);
 

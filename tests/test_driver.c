@@ -22,6 +22,8 @@ static unsigned char wire[65536], statuses[160];
 static size_t wire_used, status_used, status_size, status_chunk = 32;
 static int fail_opcode = -1, fail_advanced = -1;
 static bool counting;
+static const pt_dev *selected_model;
+static char selected_id[128], selected_uri[128];
 static struct { size_t rows, ff, eject, modes, cuts, final, infos, inits; } counts;
 static bool usb_present = true, can_open = true;
 static ssize_t usb_matches = 1;
@@ -30,10 +32,21 @@ static pappl_printer_t *poll_during_job;
 static bool busy_poll_checked;
 
 ssize_t pt_usb_count(uint16_t vid, uint16_t pid)
-{ (void)vid; (void)pid; usb_enumerations++; return usb_present ? usb_matches : 0; }
+{ assert(vid == selected_model->vid && pid == selected_model->pid); usb_enumerations++; return usb_present ? usb_matches : 0; }
 bool pt_usb_present(uint16_t vid, uint16_t pid) { return pt_usb_count(vid, pid) == 1; }
-bool pt_usb_is_uri(const char *uri)
-{ return uri && !strcmp(uri, "ptouch://Brother/PT-2730"); }
+const pt_dev *pt_usb_supported_model(const char *name)
+{
+    if (!name || !*name) name = "PT-2730";
+    return !strcmp(name, "PT-2730") || !strcmp(name, "PT-P710BT") ? pt_lookup_name(name) : NULL;
+}
+const pt_dev *pt_usb_model_from_uri(const char *uri)
+{
+    if (!uri) return NULL;
+    if (!strcmp(uri, "ptouch://Brother/PT-2730")) return pt_lookup_name("PT-2730");
+    if (!strcmp(uri, "ptouch://Brother/PT-P710BT")) return pt_lookup_name("PT-P710BT");
+    return NULL;
+}
+bool pt_usb_is_uri(const char *uri) { return pt_usb_model_from_uri(uri) != NULL; }
 ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
 {
     (void)d; (void)uri;
@@ -69,7 +82,7 @@ static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
         else if (p[0] == 12) counts.ff++;
         else if (p[0] == 26) counts.eject++;
         else if (p[0] == 27 && p[1] == '@') counts.inits++;
-        else if (p[0] == 27 && p[1] == 'i' && p[2] == 'c') counts.infos++;
+        else if (p[0] == 27 && p[1] == 'i' && (p[2] == 'c' || p[2] == 'z')) counts.infos++;
         else if (p[0] == 27 && p[1] == 'i' && p[2] == 'M') {
             counts.modes++; counts.cuts += p[3] == 0x40;
         } else if (p[0] == 27 && p[1] == 'i' && p[2] == 'K' && p[3] == 8) {
@@ -85,7 +98,7 @@ static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
 }
 static pappl_preason_t dev_status(pappl_device_t *d) { (void)d; return PAPPL_PREASON_NONE; }
 static char *dev_id(pappl_device_t *d, char *buffer, size_t n)
-{ (void)d; snprintf(buffer, n, "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;"); return buffer; }
+{ (void)d; snprintf(buffer, n, "%s", selected_id); return buffer; }
 
 static void reset_wire(void) { wire_used = 0; fail_opcode = fail_advanced = -1; }
 static void ready_status(int error, size_t chunk)
@@ -94,6 +107,15 @@ static void ready_status(int error, size_t chunk)
     /* Printing, then completed-but-still-printing, then receiving-ready. */
     for (int i = 0; i < 3; i++) {
         unsigned char *s = statuses + i * 32;
+        /* Recorded P710BT snapshot from retained p710bt-rectangles/live.log;
+         * phase mutations below reproduce its actual printing/completed/ready replies. */
+        static const unsigned char p710bt_snapshot[32] = {
+            0x80, 0x20, 0x42, 0x30, 0x76, 0x30, 0x00, 0x00,
+            0x00, 0x00, 0x0c, 0x01, 0x00, 0x00, 0x00, 0x40,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        };
+        if (selected_model->pid == 0x20af) memcpy(s, p710bt_snapshot, sizeof p710bt_snapshot);
         s[0] = 0x80; s[1] = 0x20; s[10] = 12;
         s[18] = i == 1 ? 1 : 6;
         s[19] = i == 2 ? 0 : 1;
@@ -179,21 +201,69 @@ static void end(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     assert(r_endjob(j, o, d)); assert(wire_used == before);
     papplJobDeletePrintOptions(o);
 }
+/* Length-aware decoding keeps command-looking raster bytes inside their row. */
+static size_t command_size(size_t pos)
+{
+    assert(pos < wire_used);
+    unsigned char op = wire[pos];
+    bool p710bt = selected_model->pid == 0x20af;
+    size_t n;
+    if (op == 0) {
+        assert(p710bt); n = 100;
+        assert(pos + n <= wire_used);
+        for (size_t i = 0; i < n; i++) assert(wire[pos + i] == 0);
+    } else if (op == 'G') {
+        assert(pos + 3 <= wire_used);
+        unsigned length = wire[pos + 1] | (unsigned)wire[pos + 2] << 8;
+        assert(length == (p710bt ? 17u : 16u));
+        n = 3 + length;
+        if (p710bt) assert(wire[pos + 3] == 15); /* Complete 16-byte literal run. */
+    } else if (op == 'M') {
+        assert(p710bt && wire[pos + 1] == 2); n = 2;
+    } else if (op == 12 || op == 26) n = 1;
+    else {
+        assert(op == 27);
+        if (wire[pos + 1] == '@') n = 2;
+        else {
+            assert(wire[pos + 1] == 'i');
+            unsigned char sub = wire[pos + 2];
+            if (sub == 'c' || sub == 'z') {
+                assert(sub == (p710bt ? 'z' : 'c'));
+                assert(wire[pos + 3] == 0x84 && wire[pos + 4] == 0 && wire[pos + 6] == 0);
+                n = p710bt ? 13 : 8;
+                if (p710bt) assert(wire[pos + 11] <= 1 && wire[pos + 12] == 0);
+            } else if (sub == 'd') {
+                assert(p710bt && wire[pos + 3] == 14 && wire[pos + 4] == 0); n = 5;
+            } else if (sub == 'S') n = 3;
+            else {
+                assert(sub == 'M' || sub == 'K' || sub == 'R' || sub == 'a' || sub == '!');
+                if (sub == 'R' || sub == 'a') assert(sub == (p710bt ? 'a' : 'R') && wire[pos + 3] == 1);
+                if (sub == '!') assert(p710bt && wire[pos + 3] == 0);
+                n = 4;
+            }
+        }
+    }
+    assert(pos + n <= wire_used);
+    return n;
+}
+
 static void expect_wire(int inits, int rows, int ffs, int ejects)
 {
     int actual_init = 0, actual_rows = 0, actual_ff = 0, actual_eject = 0;
+    bool fresh = false;
     for (size_t pos = 0; pos < wire_used;) {
-        if (wire[pos] == 0x47) { pos += 3 + wire[pos + 1]; actual_rows++; }
-        else if (wire[pos] == 0x0c) { pos++; actual_ff++; }
-        else if (wire[pos] == 0x1a) { pos++; actual_eject++; }
-        else if (wire[pos] == 0x1b && wire[pos + 1] == 0x40) { pos += 2; actual_init++; }
-        else {
-            assert(wire[pos] == 0x1b && wire[pos + 1] == 0x69);
-            if (wire[pos + 2] == 'M')
-                assert(wire[pos + 3] == 0x40 || wire[pos + 3] == 0);
-            pos += wire[pos + 2] == 'c' ? 8 : 4;
+        size_t n = command_size(pos);
+        if (wire[pos] == 'G') actual_rows++;
+        else if (wire[pos] == 12) actual_ff++;
+        else if (wire[pos] == 26) actual_eject++;
+        else if (wire[pos] == 27 && wire[pos + 1] == '@') { actual_init++; fresh = true; }
+        else if (wire[pos] == 27 && wire[pos + 1] == 'i') {
+            if (wire[pos + 2] == 'M') assert(wire[pos + 3] == 0x40 || wire[pos + 3] == 0);
+            if (wire[pos + 2] == 'z') {
+                assert(wire[pos + 11] == (fresh ? 0 : 1)); fresh = false;
+            }
         }
-        assert(pos <= wire_used);
+        pos += n;
     }
     if (actual_init != inits || actual_rows != rows || actual_ff != ffs || actual_eject != ejects)
         fprintf(stderr, "wire init/rows/FF/EJECT: %d/%d/%d/%d expected %d/%d/%d/%d\n",
@@ -207,15 +277,19 @@ static void expect_policy(unsigned labels, const unsigned *lengths, pt_cut_mode 
 {
     unsigned infos = 0, modes = 0, ff = 0, eject = 0, advanced_final = 0, rows = 0;
     for (size_t pos = 0; pos < wire_used;) {
-        if (wire[pos] == 0x47) { rows++; pos += 3 + wire[pos + 1]; }
-        else if (wire[pos] == 0x0c) { ff++; pos++; }
-        else if (wire[pos] == 0x1a) { eject++; pos++; }
-        else if (wire[pos] == 0x1b && wire[pos + 1] == 0x40) pos += 2;
-        else {
-            assert(wire[pos] == 0x1b && wire[pos + 1] == 0x69);
+        size_t n = command_size(pos);
+        if (wire[pos] == 'G') rows++;
+        else if (wire[pos] == 12) ff++;
+        else if (wire[pos] == 26) eject++;
+        else if (wire[pos] == 27 && wire[pos + 1] == 'i') {
             unsigned char op = wire[pos + 2], arg = wire[pos + 3];
-            if (op == 'c') {
+            if (op == 'c' || op == 'z') {
                 if (infos) assert(rows == lengths[infos - 1]);
+                if (op == 'z') {
+                    unsigned height = wire[pos + 7] | (unsigned)wire[pos + 8] << 8 |
+                                      (unsigned)wire[pos + 9] << 16 | (unsigned)wire[pos + 10] << 24;
+                    assert(infos < labels && height == lengths[infos]);
+                }
                 rows = 0; infos++;
             } else if (op == 'M') {
                 bool cut = modes == 0 || mode == PT_CUT_EACH || mode == PT_CUT_CHAIN;
@@ -227,9 +301,8 @@ static void expect_policy(unsigned labels, const unsigned *lengths, pt_cut_mode 
                     advanced_final++;
                 }
             }
-            pos += op == 'c' ? 8 : 4;
         }
-        assert(pos <= wire_used);
+        pos += n;
     }
     assert(infos == labels && modes == labels && rows == lengths[labels - 1]);
     bool final = mode == PT_CUT_EACH || mode == PT_CUT_END;
@@ -562,8 +635,12 @@ static void reject_unsupported_finishing(pappl_printer_t *p)
     ippDelete(response);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    assert(argc <= 2);
+    selected_model = pt_usb_supported_model(argc == 2 ? argv[1] : NULL); assert(selected_model);
+    snprintf(selected_id, sizeof selected_id, "MFG:Brother;MDL:%s;CMD:PT-CBP;", selected_model->name);
+    snprintf(selected_uri, sizeof selected_uri, "ptouch://Brother/%s", selected_model->name);
     pappl_pr_driver_t driver = {"brother_ptouch", "Test", NULL, NULL};
     papplDeviceAddScheme("fixture", PAPPL_DEVTYPE_CUSTOM_LOCAL, NULL, dev_open, dev_close,
                          NULL, dev_write, dev_status, dev_id);
@@ -582,9 +659,19 @@ int main(void)
                              unsupported_ids[i], &rejected, &attrs, NULL));
         assert(!rejected.rstartjob_cb && !rejected.printfile_cb && wire_used == 0);
     }
+    /* Mismatched or malformed USB identities are rejected before commands. */
+    const char *bad_uris[] = {
+        selected_model->pid == 0x20af ? "ptouch://Brother/PT-2730" : "ptouch://Brother/PT-P710BT",
+        "ptouch://Brother/PT-P710BT/extra", "ptouch://Brother/PT-unknown"
+    };
+    for (size_t i = 0; i < sizeof bad_uris / sizeof bad_uris[0]; i++) {
+        pappl_pr_driver_data_t rejected = {0}; ipp_t *attrs = NULL;
+        assert(!pt_driver_cb(sys, "brother_ptouch", bad_uris[i], selected_id, &rejected, &attrs, NULL));
+        assert(!rejected.extension && wire_used == 0);
+    }
     papplSystemSetPrinterDrivers(sys, 1, &driver, NULL, NULL, fixture_driver, NULL);
     pappl_printer_t *p = papplPrinterCreate(sys, 0, "test", "brother_ptouch",
-                         "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", "socket://127.0.0.1:9"); assert(p);
+                         selected_id, "socket://127.0.0.1:9"); assert(p);
     papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
     assert(papplSystemAddListeners(sys, "localhost"));
     pthread_t server; assert(!pthread_create(&server, NULL, run_server, sys));
@@ -598,6 +685,37 @@ int main(void)
     pt_live_read incompatible = pt_read_live_tape(d, "socket://127.0.0.1:9");
     assert(incompatible.n < 0 && !incompatible.parsed);
     assert(usb_enumerations == enumeration_before && usb_reads == reads_before && wire_used == 0);
+    if (selected_model->pid == 0x20af) {
+        /* Golden production-callback setup, then the first page of a held run.
+         * Heights come from the destination header, independent of job totals. */
+        pt_run_set(p, PT_RUN_CLOSED);
+        for (unsigned continuation = 0; continuation < 2; continuation++) {
+            pappl_job_t *setup_job = job(p, "none", 1, false);
+            pappl_pr_options_t *setup_options = begin(setup_job, d);
+            setup_options->header.cupsHeight = 180 + 36 * continuation;
+            reset_wire(); assert(r_startpage(setup_job, setup_options, d, 0));
+            unsigned char setup[] = {
+                27, 'i', 'a', 1, 27, 'i', '!', 0,
+                27, 'i', 'z', 0x84, 0, 12, 0, 0, 0, 0, 0, 0, 0,
+                27, 'i', 'M', 0x40, 27, 'i', 'K', 0,
+                27, 'i', 'd', 14, 0, 'M', 2
+            };
+            unsigned rows = setup_options->header.cupsHeight;
+            for (unsigned i = 0; i < 4; i++) setup[15 + i] = (unsigned char)(rows >> (8 * i));
+            setup[19] = (unsigned char)continuation;
+            unsigned char expected[138] = {0}; size_t prefix = continuation ? 0 : 102;
+            if (!continuation) { expected[100] = 27; expected[101] = '@'; }
+            memcpy(expected + prefix, setup, sizeof setup);
+            assert(wire_used == prefix + sizeof setup && !memcmp(wire, expected, wire_used));
+            unsigned char pixels[32] = {0}; size_t before = wire_used;
+            assert(r_writeline(setup_job, setup_options, d, 0, pixels));
+            unsigned char row[20] = {'G', 17, 0, 15};
+            assert(wire_used == before + sizeof row && !memcmp(wire + before, row, sizeof row));
+            assert(r_endpage(setup_job, setup_options, d, 0)); end(setup_job, setup_options, d);
+            assert(pt_chain_get(p));
+        }
+        pt_run_set(p, PT_RUN_CLOSED); reset_wire();
+    }
     setenv("PTOUCH_CUT_MODE", "each", 1); /* Must not override an explicit none. */
     setenv("PTOUCH_PRECUT", "0", 1); /* Retired: mandatory precut cannot be disabled. */
     const char *choices[] = {NULL, "none", "{finishing-template=none}"};
@@ -677,7 +795,7 @@ int main(void)
     assert(wire_used == pending_size && pt_run_get(p) == PT_RUN_UNCERTAIN);
     /* Actual USB status parsing consumes all phases, including fragmented packets. */
     pappl_printer_t *usb = papplPrinterCreate(sys, 0, "usb", "brother_ptouch",
-                       "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", "ptouch://Brother/PT-2730"); assert(usb);
+                       selected_id, selected_uri); assert(usb);
     j = job(usb, "none", 1, false);
     for (size_t chunk = 7; chunk <= 32; chunk += 25) {
         ready_status(0, chunk); assert(pt_wait_ready(j, d)); assert(status_used == status_size);
@@ -832,7 +950,7 @@ int main(void)
 
     /* Cassette detection must survive an open none run without ESC @. */
     pappl_printer_t *poll = papplPrinterCreate(sys, 0, "poll", "brother_ptouch",
-                       "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", "ptouch://Brother/PT-2730"); assert(poll);
+                       selected_id, selected_uri); assert(poll);
     const int widths[] = {12, 24, 0};
     for (int i = 0; i < 3; i++) {
         ready_status(0, 32); statuses[10] = widths[i]; statuses[18] = statuses[19] = 0;
@@ -862,7 +980,7 @@ int main(void)
     for (int i = 0; i < 10; i++) {
         char name[32]; snprintf(name, sizeof name, "owned-%d", i);
         pappl_printer_t *owned = papplPrinterCreate(sys, 0, name, "brother_ptouch",
-                               "MFG:Brother;MDL:PT-2730;", "socket://127.0.0.1:9");
+                               selected_id, "socket://127.0.0.1:9");
         assert(owned && pt_state(owned) && pt_state(owned) != pt_state(p));
         assert(pt_run_get(owned) == PT_RUN_CLOSED && !pt_media_confirmed(owned));
     }
@@ -875,7 +993,7 @@ int main(void)
     assert(!listen(sink_listener, 1));
     char socket_uri[128]; snprintf(socket_uri, sizeof socket_uri, "socket://127.0.0.1:%u", ntohs(address.sin_port));
     pappl_printer_t *capture = papplPrinterCreate(sys, 0, "capture", "brother_ptouch",
-                              "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", socket_uri); assert(capture);
+                              selected_id, socket_uri); assert(capture);
     png_socket_case(capture, NULL, 1, false, 1, 0, 1);
     png_socket_case(capture, "none", 3, false, 1, 3, 0);
     png_socket_case(capture, "malformed", 1, false, 0, 0, 0);
@@ -963,7 +1081,7 @@ int main(void)
     raster_socket_case(capture, "trim", false, 1, 1, 1, CUPS_RASTER_WRITE_PWG, true);
     pt_run_set(capture, PT_RUN_CLOSED); /* Simulate documented explicit recovery. */
     pappl_printer_t *counter = papplPrinterCreate(sys, 0, "counter", "brother_ptouch",
-                              "MFG:Brother;MDL:PT-2730;", "fixture://counter"); assert(counter);
+                              selected_id, "fixture://counter"); assert(counter);
     counting_png_case(counter, "none", 65, PT_CUT_NONE);
     counting_png_case(counter, "trim", 999, PT_CUT_EACH);
     close(sink_listener);

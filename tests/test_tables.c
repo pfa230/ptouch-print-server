@@ -1,11 +1,21 @@
 #include <assert.h>
 #include <stddef.h>
+#include <string.h>
 #include "tables.h"
 
 int main(void) {
     const pt_dev *d = pt_lookup_dev(0x04f9, 0x2041);
     assert(d && d->max_px == 128 && d->dpi == 180);
+    assert(pt_lookup_name("PT-2730") == d && d->flags == FLAG_NONE);
     assert(pt_lookup_dev(0x04f9, 0x9999) == NULL);
+    assert(pt_lookup_dev(0xffff, 0x20af) == NULL);
+    assert(pt_lookup_name("PT-unknown") == NULL && pt_lookup_name(NULL) == NULL);
+
+    const pt_dev *p710bt = pt_lookup_dev(0x04f9, 0x20af);
+    assert(p710bt && strcmp(p710bt->name, "PT-P710BT") == 0);
+    assert(p710bt->max_px == 128 && p710bt->dpi == 180);
+    assert(p710bt->flags == (FLAG_RASTER_PACKBITS | FLAG_P700_INIT));
+    assert(pt_lookup_name("PT-P710BT") == p710bt);
 
     /* per-model flags are carried */
     const pt_dev *p700 = pt_lookup_dev(0x04f9, 0x2061);

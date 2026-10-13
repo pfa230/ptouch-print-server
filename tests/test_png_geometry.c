@@ -23,8 +23,16 @@ static unsigned fail_row;
 static unsigned written_rows;
 static bool truncate_png;
 static pappl_job_t *last_job;
+static const char *selected_model;
+static bool packbits;
+const pt_dev *pt_usb_supported_model(const char *name)
+{
+    if (!name || !*name) name = "PT-2730";
+    return !strcmp(name, "PT-2730") || !strcmp(name, "PT-P710BT") ? pt_lookup_name(name) : NULL;
+}
+const pt_dev *pt_usb_model_from_uri(const char *uri) { (void)uri; return NULL; }
 bool pt_usb_present(uint16_t vid, uint16_t pid) { (void)vid; (void)pid; return false; }
-int pt_usb_count(uint16_t vid, uint16_t pid) { (void)vid; (void)pid; return 0; }
+ssize_t pt_usb_count(uint16_t vid, uint16_t pid) { (void)vid; (void)pid; return 0; }
 bool pt_usb_is_uri(const char *uri) { (void)uri; return false; }
 ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
 { (void)d; (void)uri; (void)buffer; (void)bytes; assert(!"Unexpected USB read"); return -1; }
@@ -40,7 +48,7 @@ static ssize_t device_write(pappl_device_t *d, const void *buffer, size_t n)
 }
 static pappl_preason_t device_status(pappl_device_t *d) { (void)d; return PAPPL_PREASON_NONE; }
 static char *device_id(pappl_device_t *d, char *b, size_t n)
-{ (void)d; snprintf(b, n, "MFG:Brother;MDL:PT-2730;"); return b; }
+{ (void)d; snprintf(b, n, "MFG:Brother;MDL:%s;", selected_model); return b; }
 static bool printer_status(pappl_printer_t *p) { (void)p; return true; }
 static bool driver(pappl_system_t *s, const char *name, const char *uri, const char *id,
                    pappl_pr_driver_data_t *data, ipp_t **attrs, void *cb)
@@ -58,22 +66,67 @@ static void operation(ipp_t *request)
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "test");
 }
+/* Command lengths bound raster payloads, including opcode bytes in PackBits. */
 static unsigned rows(unsigned char image[][128], unsigned *finishes)
 {
-    unsigned y = 0; *finishes = 0;
+    unsigned y = 0, page_rows = 0, expected_rows = 0;
+    bool compressed = false, fresh = false;
+    *finishes = 0;
     for (size_t pos = 0; pos < used;) {
+        size_t n;
         if (wire[pos] == 'G') {
-            assert(wire[pos + 1] == 16 && y < 7000);
+            assert(used - pos >= 3 && wire[pos + 2] == 0 && y < 7000);
+            n = 3 + wire[pos + 1]; assert(n <= used - pos);
+            unsigned char head[16]; size_t decoded = 0;
+            if (compressed) {
+                for (size_t i = pos + 3; i < pos + n;) {
+                    unsigned control = wire[i++];
+                    size_t count = control < 128 ? control + 1 : 257 - control;
+                    if (control == 128) continue;
+                    assert(decoded + count <= sizeof head);
+                    if (control < 128) {
+                        assert(count <= pos + n - i);
+                        memcpy(head + decoded, wire + i, count); i += count;
+                    } else {
+                        assert(i < pos + n); memset(head + decoded, wire[i++], count);
+                    }
+                    decoded += count;
+                }
+            } else {
+                assert(!packbits && n == 19); memcpy(head, wire + pos + 3, 16); decoded = 16;
+            }
+            assert(decoded == sizeof head);
             if (image) for (unsigned x = 0; x < 128; x++)
-                image[y][x] = !!(wire[pos + 3 + 15 - x / 8] & (1u << (x % 8)));
-            y++; pos += 19;
+                image[y][x] = !!(head[15 - x / 8] & (1u << (x % 8)));
+            y++; page_rows++;
         } else if (wire[pos] == 12 || wire[pos] == 26) {
-            ++*finishes; pos++;
+            if (packbits) assert(page_rows == expected_rows);
+            page_rows = 0; ++*finishes; n = 1;
+        } else if (wire[pos] == 0) {
+            assert(packbits); n = 1; /* Fresh-run invalidation. */
+        } else if (wire[pos] == 'M') {
+            assert(packbits && used - pos >= 2 && wire[pos + 1] == 2);
+            compressed = true; n = 2;
         } else {
-            assert(wire[pos] == 27);
-            if (wire[pos + 1] == '@') pos += 2;
-            else { assert(wire[pos + 1] == 'i'); pos += wire[pos + 2] == 'c' ? 8 : wire[pos + 2] == 'S' ? 3 : wire[pos + 2] == 'd' ? 5 : 4; }
+            assert(wire[pos] == 27 && used - pos >= 2);
+            if (wire[pos + 1] == '@') { n = 2; fresh = true; compressed = false; }
+            else {
+                assert(used - pos >= 3 && wire[pos + 1] == 'i');
+                unsigned op = wire[pos + 2];
+                n = op == 'c' ? 8 : op == 'z' ? 13 : op == 'S' ? 3 : op == 'd' ? 5 : 4;
+                assert(n <= used - pos);
+                if (op == 'z') {
+                    assert(packbits && wire[pos + 3] == 0x84);
+                    expected_rows = (unsigned)wire[pos + 7] | (unsigned)wire[pos + 8] << 8 |
+                        (unsigned)wire[pos + 9] << 16 | (unsigned)wire[pos + 10] << 24;
+                    assert(wire[pos + 11] == (fresh ? 0 : 1)); fresh = false;
+                } else if (op == 'c' || op == 'R') assert(!packbits);
+                else if (op == 'a') assert(packbits && wire[pos + 3] == 1);
+                else if (op == '!') assert(packbits && wire[pos + 3] == 0);
+                else assert(op == 'M' || op == 'K' || op == 'S' || op == 'd');
+            }
         }
+        assert(n <= used - pos); pos += n;
     }
     return y;
 }
@@ -195,17 +248,21 @@ static void run_image(pappl_printer_t *printer, int width, int height, int xppi,
     assert(actual_rows == expected_rows);
     if (!success) assert(!finishes);
 }
-int main(void)
+static void run_model(const char *model, int index)
 {
+    selected_model = model; packbits = !strcmp(model, "PT-P710BT");
+    assert(!setenv("PTOUCH_MODEL", model, 1));
+    used = fail_row = written_rows = 0;
     pappl_pr_driver_t drv = {"ptouch", "Test", NULL, NULL};
     papplDeviceAddScheme("pngfixture", PAPPL_DEVTYPE_CUSTOM_LOCAL, NULL, device_open,
         device_close, NULL, device_write, device_status, device_id);
-    port = 30000 + getpid() % 15000;
+    port = 30000 + getpid() % 15000 + index;
     pappl_system_t *sys = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "png-geometry", port,
         NULL, NULL, "/tmp/ptouch-png-geometry.log", PAPPL_LOGLEVEL_ERROR, NULL, false); assert(sys);
     papplSystemSetPrinterDrivers(sys, 1, &drv, NULL, NULL, driver, NULL);
     papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
-    pappl_printer_t *p = papplPrinterCreate(sys, 0, "png", "ptouch", "MFG:Brother;MDL:PT-2730;", "pngfixture://capture"); assert(p);
+    char id[128]; snprintf(id, sizeof id, "MFG:Brother;MDL:%s;", model);
+    pappl_printer_t *p = papplPrinterCreate(sys, 0, "png", "ptouch", id, "pngfixture://capture"); assert(p);
     assert(papplSystemAddListeners(sys, "localhost"));
     pthread_t thread; assert(!pthread_create(&thread, NULL, server, sys));
     http = httpConnect2("localhost", port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL); assert(http);
@@ -307,6 +364,30 @@ int main(void)
     run_image(p, 76, 1, 180, 180, pixels, 3, 0, 1, "none", true, 35);
     run_image(p, 76, 2125, 180, 180, pixels, 3, 0, 1, "none", true, 2125);
     run_image(p, 76, 2126, 180, 180, pixels, 3, 0, 1, "none", false, 0);
+    /* Decoded full-width outlines exercise the common window on all five tapes. */
+    pappl_pr_driver_data_t ready; papplPrinterGetDriverData(p, &ready);
+    pappl_media_col_t original_media = ready.media_ready[0];
+    const int tapes[] = {6, 9, 12, 18, 24};
+    for (unsigned i = 0; i < sizeof tapes / sizeof tapes[0]; i++) {
+        pt_geometry geometry; assert(pt_tape_geometry(tapes[i], &geometry));
+        pappl_media_col_t media = original_media;
+        media.size_width = tapes[i] * 100;
+        media.left_margin = geometry.left_margin_centimm;
+        media.right_margin = geometry.right_margin_centimm;
+        snprintf(media.size_name, sizeof media.size_name, "custom_%dx100mm_%dx100mm", tapes[i], tapes[i]);
+        assert(papplPrinterSetReadyMedia(p, 1, &media));
+        int width = geometry.imageable_px;
+        memset(pixels, 255, width * 180);
+        for (int y = 0; y < 180; y++) for (int x = 0; x < width; x++)
+            if (!y || y == 179 || !x || x == width - 1) pixels[y * width + x] = 0;
+        run_image(p, width, 180, 180, 180, pixels, 3, 0, 1, "none", true, 180);
+        assert(rows(actual, &finishes) == 180);
+        int start = (128 - width) / 2;
+        for (int y = 0; y < 180; y++) for (int x = 0; x < 128; x++)
+            assert(actual[y][x] == (x >= start && x < start + width &&
+                (!y || y == 179 || x == start || x == start + width - 1)));
+    }
+    assert(papplPrinterSetReadyMedia(p, 1, &original_media));
     truncate_png = true;
     run_image(p, 76, 180, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     truncate_png = false;
@@ -324,5 +405,10 @@ int main(void)
     /* Do not add a detached PAPPL client while the system is shutting down. */
     pthread_join(thread, NULL); papplSystemDelete(sys);
     puts("PNG IPP geometry, copies, blank margins, scaling, and complete raster markers passed");
+}
+int main(void)
+{
+    run_model("PT-2730", 0);
+    run_model("PT-P710BT", 1);
     return 0;
 }

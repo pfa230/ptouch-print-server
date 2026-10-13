@@ -4,8 +4,9 @@ context: |
   Read README.md and openspec/specs/server-architecture/spec.md for current behavior
   and architectural constraints;
   spikes/FINDINGS.md is historical and some conclusions have been superseded.
-  Only the Brother PT-2730 is hardware-certified. Other recognized USB models
-  must not be described as print-supported without protocol work and validation.
+  Brother PT-2730 and PT-P710BT are hardware-certified; P710BT physical coverage
+  is 9/12/18 mm over USB, with software-only 6/24 mm coverage. Other recognized
+  USB models must not be described as print-supported without protocol work and validation.
   Preserve 1:1 printing, nominal tape widths with real imageable margins, strict
   width rejection, offline recovery, and cross-job chaining unless the change
   explicitly revises those contracts.

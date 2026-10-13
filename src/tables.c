@@ -2,9 +2,9 @@
 #include <string.h>
 #include "tables.h"
 
-/* P-touch device family (transcribed from hannesweisbach/ptouch-print
- * src/libptouch.c). Only the PT-2730 is hardware-certified here; the rest are
- * best-effort, untested. All known models are 180dpi / 128px max. */
+/* Recognition metadata, not a print-support gate. PT-2730 and PT-P710BT are
+ * certified (P710BT on 9/12/18 mm over USB). Other rows are untested.
+ * All catalogued models use a 180dpi / 128-dot head. */
 static const pt_dev g_devs[] = {
     {0x04f9, 0x2007, "PT-2420PC",            128, 180, FLAG_RASTER_PACKBITS},
     {0x04f9, 0x202c, "PT-1230PC",            128, 180, FLAG_NONE},
@@ -20,6 +20,7 @@ static const pt_dev g_devs[] = {
     {0x04f9, 0x2065, "PT-P750W (PLite)",     128, 180, FLAG_PLITE},
     {0x04f9, 0x2073, "PT-D450",              128, 180, FLAG_RASTER_PACKBITS},
     {0x04f9, 0x2074, "PT-D600",              128, 180, FLAG_RASTER_PACKBITS},
+    {0x04f9, 0x20af, "PT-P710BT",            128, 180, FLAG_RASTER_PACKBITS | FLAG_P700_INIT},
     {0, 0, NULL, 0, 0, 0},
 };
 
