@@ -9,21 +9,10 @@ The Brother raster protocol and device table are reused from
 [hannesweisbach/ptouch-print](https://github.com/hannesweisbach/ptouch-print)
 (GPL). See [LICENSE](LICENSE).
 
-## Status
+## Capabilities
 
-Working and deployed. Only the **Brother PT-2730** is print-supported and
-hardware-certified; other recognized models do not receive print output.
-
-| Milestone | Scope | State |
-|-----------|-------|-------|
-| M0 | Hardware spike: confirm the raster bytes and the `usb://` hang on real hardware | Done |
-| M1 | Pure C core: device table, protocol command builders, raster packing, status parse | Done |
-| M2 | PAPPL adapter and read path: custom `ptouch://` libusb scheme, media/status callback | Done |
-| M3 | Print path: 1:1 geometry, roll media, per-tape imageable width | Done |
-| M4 | Cutter modes, chaining, and the strict width guard | Done |
-| M5 | Packaging, GHCR publishing, container deployment | Done |
-
-What it does today:
+Only the **Brother PT-2730** is print-supported and hardware-certified;
+other recognized models do not receive print output.
 
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.
@@ -38,7 +27,6 @@ What it does today:
   recovers on its own when it comes back - queued jobs then print.
 
 Known gaps are tracked as issues; cross-tape centring is uncalibrated.
-Only PT-2730 behavior is hardware-certified.
 
 ## Architecture
 
@@ -55,8 +43,8 @@ Three layers:
    raster print callbacks (`rstartjob` / `rwriteline` / `rendjob`).
 
 3. **Custom `ptouch://` libusb scheme** (`src/device_usb.c`). PAPPL's built-in
-   `usb://` scheme issues an IEEE-1284 device-ID probe that hangs on the PT-2730
-   (confirmed in M0). This project registers its own `ptouch://`
+   `usb://` scheme issues an IEEE-1284 device-ID probe that hangs on the PT-2730.
+   This project registers its own `ptouch://`
    `PAPPL_DEVTYPE_CUSTOM_LOCAL` scheme over raw libusb with bounded timeouts, and
    never auto-adds the built-in `usb://` device.
 
