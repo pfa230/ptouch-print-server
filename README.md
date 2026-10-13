@@ -11,8 +11,8 @@ The Brother raster protocol and device table are reused from
 
 ## Status
 
-Working and deployed. Only the **Brother PT-2730** is hardware-certified; the
-print path emits PT-2730 protocol for every device.
+Working and deployed. Only the **Brother PT-2730** is print-supported and
+hardware-certified; other recognized models do not receive print output.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -25,15 +25,15 @@ print path emits PT-2730 protocol for every device.
 
 What it does today:
 
-- Prints 1:1 at the tape's imageable width, with the label length taken from the
-  submitted image rather than a fixed page.
+- Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
+  PNG length follows its image when a concrete media length is omitted.
 - Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
   match the tape they actually loaded.
-- Uses each job's IPP **finishings** choice: `none` leaves tape uncut and keeps
-  the run open; `trim` cuts its labels and finalizes the last one. Queue contents
-  and idle time do not choose whether to cut.
+- Uses standard IPP **finishings** for cuts between labels and at batch end,
+  including an advertised chain-only collection template. Queue contents and
+  idle time do not choose whether to cut.
 - Rejects a job whose width does not match the loaded tape, before anything is
-  sent to the printer.
+  sent as page setup or raster to the printer.
 - Reports `offline` when the printer is switched off instead of disappearing, and
   recovers on its own when it comes back - queued jobs then print.
 
@@ -64,10 +64,12 @@ Three layers:
 
 `src/tables.c` recognizes the P-touch USB ids below (transcribed from upstream
 `ptdevs[]`). **Only the PT-2730 is print-supported and hardware-certified.** Every
-other entry is recognized and discoverable, but is **not print-supported**: the
-raster path emits PT-2730 protocol (uncompressed, 128-dot head) regardless of the
-matched model, and per-model flag dispatch (PackBits, P700 init) does not exist
-yet. All known models are 180 dpi / 128 px max.
+other entry remains recognition metadata and is **not print-supported**: discovery
+reports it in diagnostics without offering a printable device. Per-model flag
+dispatch (PackBits, P700 init) does not exist yet. All known models are 180 dpi /
+128 px max. `PTOUCH_MODEL` defaults to `PT-2730`; unknown or unsupported values
+fail before discovery. Multiple matching PT-2730 units block printing as ambiguous,
+while a single unit can be unplugged and reattached without replacing its queue.
 
 | Model | USB id | flags | Print-supported |
 |-------|--------|-------|-----------------|
@@ -90,79 +92,140 @@ To add a model, see [docs/ADDING-A-MODEL.md](docs/ADDING-A-MODEL.md).
 
 ## Build and run
 
-The pure C core builds and unit-tests anywhere with CMake and a C11 compiler. No
-hardware or PAPPL needed:
+The hardware-free core requires CMake, a C11 compiler, and Python 3 for the
+capture suite. Select core-only mode explicitly; PAPPL and USB are not needed:
 
 ```bash
-cmake -S . -B build && cmake --build build && ctest --test-dir build
+cmake -S . -B build-core -DPTOUCH_CORE_ONLY=ON
+cmake --build build-core
+ctest --test-dir build-core --output-on-failure
 ```
 
-This builds `ptcore` and runs the five core test suites (tables, protocol,
-raster, status, cutter).
+This builds `ptcore` and the command probe, then runs the five core suites
+(tables, protocol, raster, status, cutter) and the Python capture suite.
 
-The full `ptouch-app` executable builds only where PAPPL and libusb-1.0 are
-present (`pkg-config` finds `pappl` and `libusb-1.0`). On a machine without them,
-CMake skips the app target and still builds the core and tests. The app is built
-and exercised against PT-2730 hardware in a container; see `Dockerfile`.
+The default full build requires `pkg-config` packages `pappl`, `libusb-1.0`,
+and `libpng`, in addition to the core test tools. Missing dependencies fail
+configuration. It builds `ptouch-app` and the adapter tests as well as the core:
+
+```bash
+cmake -S . -B build-app -DPTOUCH_CORE_ONLY=OFF
+cmake --build build-app
+ctest --test-dir build-app --output-on-failure
+```
+
+`Dockerfile` supplies the development dependencies; `Dockerfile.deploy` builds
+all targets and runs CTest before installing the app into the runtime image.
+These tests use no printer; physical behavior requires separate PT-2730 checks.
 
 ### Printing notes for clients
 
-The printer advertises continuous-roll media (tape-width-fixed, length-variable
-`roll_min`/`roll_max` range) and uses `print-scaling=none`, so a label prints
-1:1. For a label to come out at its true size, a client must:
+Media dimensions describe the physical tape, and `media-ready` publishes the
+loaded nominal width with its physical left/right margins. The supported tape
+widths are 6, 9, 12, 18, and 24 mm. A page whose width does not match the loaded
+tape is refused before raster output. The default `print-scaling=none` preserves
+physical size; explicit standard scaling requests use PAPPL's placement policy.
+The server does not silently choose fit or crop to rescue a mismatched design.
 
-- send the image at the printer resolution, **180 dpi** (a PNG with no DPI
-  metadata is read as 180 dpi), and
-- match the loaded tape across its width. The printer reports the tape via
-  `media-ready` at its **nominal** width, with the unprintable edge expressed as
-  left/right margins (a 24 mm tape images ~18 mm, the 128-dot head); a job whose
-  rendered width does not match the loaded tape is refused.
+For PNG at `print-scaling=none`, use the printer's 180 dpi resolution. PNGs
+without resolution metadata are interpreted as 180 dpi; square DPI metadata
+sets the physical size, while non-square DPI is rejected. Cross-tape content
+must fit the imageable width (32, 52, 76, 120, or 128 printer dots respectively).
+A full nominal-width canvas is also accepted when its non-imageable edge
+margins are entirely white after transparency is composited. Nonblank physical
+margins, oversized content, or content longer than an explicitly selected page
+are rejected before page raster rather than silently clipped.
 
-**Label length follows the PNG.** A submitted `image/png` prints at the physical
-length of the image itself (its along-the-tape pixel count divided by its DPI),
-so no `media-col` length is needed and there are no blank runs before and after
-the content. Lengths below the 5 mm roll minimum are padded up to it; anything
-over the 300 mm roll maximum is refused rather than cropped. JPEG is unaffected:
-it still goes through PAPPL's built-in filter and prints on the fixed media
-length.
+An explicit named `media` size, `media-col.media-size-name`, or
+`media-col.media-size.y-dimension` determines
+PNG page length. For example, a 180-pixel image at 180 dpi on explicitly selected
+50 mm media prints a 50 mm page, with centered content. If concrete length is
+omitted, PNG length follows its oriented along-tape pixel dimension and DPI.
+Source-only or margin-only `media-col` does not suppress that convenience.
+Automatic lengths below 5 mm are padded to 5 mm; lengths above 300 mm are refused.
+PNG's automatic orientation uses portrait for tall/square images and
+reverse-landscape (90 degrees clockwise) for wide images. Explicit standard
+`orientation-requested` overrides it.
+
+JPEG uses PAPPL's standard image placement and selected/default media length,
+without PNG's automatic-length convenience or source-content preflight. Standard
+PWG raster and URF retain each submitted page's geometry. Explicit page dimensions
+have the same physical meaning across formats; contradictory raster/job dimensions
+fail visibly. PNG is advertised once as `image/png`, without a private raster MIME.
+
+Custom lengths also use standard `media-col` dimensions. The roll declarations
+accept width rounding of ±0.01 mm around each nominal tape width for CUPS custom
+sizes; this does not permit selecting another cassette or enlarging its physical
+printable window. The submitted length and explicit margins remain authoritative.
+
+CUPS 2.4's generated PPD has one custom-size margin for all tapes. It chooses the
+largest advertised margins, so `media=Custom.12x40mm` leaves only about 42 printable
+dots on 12 mm tape. A fitting design prints at 1:1; a 76-dot design is rejected.
+Named media presets carry the correct per-tape margins. For arbitrary lengths
+with the full imageable width, submit standard `media-col` dimensions and the
+published tape margins. The server never replaces explicit margins or shrinks
+content to conceal this CUPS limitation.
 
 ### Cutting
 
-Select cutting through the standard IPP job attribute `finishings`:
+One IPP job is one batch: its PNG copies or actual raster labels. Select cutting
+through standard `finishings` or `finishings-col`:
 
-| Selection | IPP enum | Behavior |
-|-----------|----------|----------|
-| `none` | `3` | No leader, intermediate, or terminal cuts; leave the tape run open |
-| `trim` | `11` | Cut each requested copy and finalize the last label |
+| Selection | IPP selection | Behavior |
+|-----------|---------------|----------|
+| Chain and continue | `finishings-col` template `ptouch-chain` | Cut between labels; hold the last end |
+| Chain and finish | `finishings=60`, or compatibility alias `11` | Cut between labels and cut the final end |
+| No label cuts | `finishings=3` | Join labels; hold the batch end |
+| Final cut only | `finishings=63` | Join labels; cut only at batch end |
 
-PAPPL also accepts `finishings-col` with `finishing-template=none` or `trim`.
-An omitted option uses the advertised `finishings-default`, currently `none`.
-Clients that require a cut must request it. For example, with a CUPS queue named
-`ptouch`:
+**Precut is mandatory once per nonempty batch**, including none and final-only.
+A fresh run discards its initial leader. A healthy continuation releases the
+preceding held end without a new discarded leader. Consecutive none batches
+therefore become separate uncut strips. An unfinished run can remain open across
+idle gaps; canceled/rejected followers do not silently finish it.
+
+Omission honors the current printer default, initially `trim` (11), so ordinary
+jobs cut their labels free. Request none explicitly to leave a batch open.
+With a CUPS queue named `ptouch`:
 
 ```sh
-lp -d ptouch -o finishings=3 intermediate.png
-lp -d ptouch -o finishings=11 final.png
+lp -d ptouch -n 3 -o finishings=60 labels.png  # three separate labels, final cut
+lp -d ptouch -n 3 -o finishings=63 strip.png   # one joined strip, final cut
+lp -d ptouch -o finishings=3 unfinished.png   # hold its end for continuation
 ```
 
-The server does not infer a batch boundary from queued jobs. A no-cut run remains
-uncut during idle time or if its intended final job is canceled or never arrives.
-A subsequent job continues without resetting the unfinished run, even after an
-idle gap. State is kept in memory, so restarting the server during an unfinished
-run is not supported. `none` disables all cutting; it does not promise that the
-intermediate labels are individually separated.
+Registered collection templates `trim`, `trim-after-pages`, and `trim-after-job`
+select the corresponding enum policies; collection `no-value` selects none.
+`ptouch-chain` is a printer-defined name carried through the standard collection,
+with the meaning shown above. Generic dialogs may expose only registered enum
+choices; a client must support collection/template submission to select chain-only.
+Do not submit both finishing representations in the same job. Enum 60 plus 63
+means chain-and-finish with one terminal cut; enum none alongside other values
+is ignored according to IPP.
+
+Printer defaults accept the three policies with registered enum equivalents;
+enum and collection defaults stay synchronized. Chain-only is explicitly per-job,
+because there is no lossless registered enum for its printer-defined meaning.
+Existing CUPS queues can retain a cached or explicit none default: refresh their
+standard queue settings to use trim when adopting this change, for example
+`lpoptions -p <queue> -o finishings=11`. This was verified with an ordinary
+CUPS driverless queue; its generated PPD can otherwise submit explicit none
+even to a server advertising trim by default. Explicit none remains honored. Retire old `finishings-col` template `none` submissions in favor
+of enum 3 or standard collection no-value.
+
+The server uses each complete raster label and successful end-of-input, so an
+unknown total count requires no custom metadata. PNG copies support 1 through
+999; PWG raster and URF support one copy with multiple labels in the document.
+Run state lives in memory. Restart during an unfinished run is unsupported;
+finish it deliberately first. Interrupted output requires printer power-cycle
+followed by server restart, as described below.
 
 ## Configuration
 
-Cutting is selected by the job's finishing option. These environment variables
-configure the remaining print behavior; the driver reads them per job.
-
-| Variable | Values | Meaning |
-|----------|--------|---------|
-| `PTOUCH_PRECUT` | `1` (default) / `0` | Enable leader cutting for `trim` jobs; `none` always disables it |
-| `PTOUCH_WIDTH_GUARD` | `strict` (default) | Refuse to print when the rendered width does not match the loaded tape. Only `strict` is implemented; any other value falls back to `strict` |
-
-`PTOUCH_CUT_MODE` is obsolete and ignored; it cannot override job finishings.
+Cutting uses the job's standard finishing choice. `PTOUCH_PRECUT`,
+`PTOUCH_CUT_MODE`, and `PTOUCH_WIDTH_GUARD` are retired and ignored. Mandatory
+batch precut and strict geometry rejection are intrinsic; no replacement server
+knob is needed. `PTOUCH_MODEL` defaults to the supported PT-2730.
 
 `PTOUCH_DEVICE_URI` overrides device discovery with an explicit URI (e.g.
 `socket://127.0.0.1:9100`) for testing without a PT-2730; the printer registers
@@ -173,14 +236,28 @@ but only connects on an actual print.
 The deploy image is published to GHCR as
 `ghcr.io/pfa230/ptouch-print-server:edge` (the moving tag) and a per-commit
 `sha-<commit>` tag for rollback. It is built and pushed by
-`.github/workflows/deploy.yml` on every push to `main`; pull requests build and
-run an IPP smoke test but do not push.
+`.github/workflows/deploy.yml` on every push to `main`. Both pull requests and
+main run the core, driver, and capture suites and submit real IPP jobs to a socket
+sink in the deploy-image smoke before publication. Pull requests do not publish.
 
 The image is a multi-stage build (`Dockerfile.deploy`): PAPPL 1.4.11 and the app
 compile in a Debian build stage, and only the runtime libraries, `avahi-daemon`,
 and `dbus` ship in the `debian-bookworm-slim` runtime stage. The entrypoint
 starts a system dbus and Avahi, then runs `ptouch-app server` on port 8000. The
-container has no persistent state, so no volume is needed.
+application writes normal startup, job, and error diagnostics directly to stderr,
+visible through `docker logs`; no debug logfile or separate tail process is
+needed. dbus and Avahi startup failures stop the entrypoint and remain visible.
+The container has no persistent state, so no volume is needed.
+
+If a job reports uncertain output, inspect `docker logs ptouch` and
+`docker exec ptouch ptouch-app jobs -d ptouch` before restarting; job states and
+standard IPP Get-Job-Attributes identify aborted work. Power-cycle the printer,
+then run `docker restart ptouch` and check
+`docker exec ptouch ptouch-app status -d ptouch`. Explicitly resubmit the desired
+failed job after recovery. A clean status or USB replug alone does not clear
+uncertainty; server restart alone does not clear the printer's buffered raster.
+In-memory job history and an unfinished tape run are not promised to survive
+restart, and the server does not automatically replay ambiguous output.
 
 ```yaml
 services:
@@ -193,9 +270,6 @@ services:
       nofile:                            # dbus needs 65536; below that it dies,
         soft: 65536                      # avahi dies with it, and DNS-SD
         hard: 65536                      # advertises nothing at all
-    environment:
-      PTOUCH_PRECUT: "1"
-      PTOUCH_WIDTH_GUARD: strict
     volumes:
       - /dev/bus/usb:/dev/bus/usb        # BIND MOUNT, not `devices:` - see below
     device_cgroup_rules:

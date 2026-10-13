@@ -19,5 +19,19 @@ int main(void) {
     assert(pt_tape_px(9)  == 52);
     assert(pt_tape_px(6)  == 32);
     assert(pt_tape_px(99) == 0);
+    const int widths[] = {6, 9, 12, 18, 24};
+    const int nominal[] = {42, 63, 85, 127, 170};
+    const int imageable[] = {32, 52, 76, 120, 128};
+    for (unsigned i = 0; i < sizeof widths / sizeof widths[0]; i++) {
+        pt_geometry g;
+        assert(pt_tape_geometry(widths[i], &g));
+        assert(g.nominal_px == nominal[i] && g.imageable_px == imageable[i]);
+        assert(g.left_px == (nominal[i] - imageable[i]) / 2);
+        assert(g.right_px - g.left_px == imageable[i] && g.right_px <= nominal[i]);
+        assert(g.margin_centimm >= 53);
+    }
+    pt_geometry g;
+    assert(pt_tape_geometry(18, &g) && g.margin_centimm == 53);
+    assert(!pt_tape_geometry(36, &g) && !pt_tape_geometry(99, &g));
     return 0;
 }

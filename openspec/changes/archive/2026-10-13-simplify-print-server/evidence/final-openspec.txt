@@ -1,0 +1,6 @@
+- Validating...
+✓ spec/batch-printing
+  ℹ [INFO] requirements[1]: Requirement text is very long (>500 characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.
+✓ spec/label-rendering
+✓ spec/printer-device
+Totals: 3 passed, 0 failed (3 items)

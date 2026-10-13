@@ -67,3 +67,25 @@ int pt_tape_px(int mm)
     }
     return 0;
 }
+
+bool pt_tape_geometry(int tape_mm, pt_geometry *out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof *out);
+    int px = pt_tape_px(tape_mm);
+    if (px <= 0 || px > 128) return false;
+    out->nominal_px = tape_mm * 100 * 180 / 2540;
+    out->imageable_px = px;
+    out->left_px = (out->nominal_px - px) / 2;
+    out->right_px = out->left_px + px;
+    /* Ceiling round-trips to the exact imageable pixel width. */
+    int printable_centimm = (px * 2540 + 179) / 180;
+    out->margin_centimm = (tape_mm * 100 - printable_centimm) / 2;
+    out->left_margin_centimm = (out->left_px * 2540 + 179) / 180;
+    out->right_margin_centimm = ((out->nominal_px - out->right_px) * 2540 + 179) / 180;
+    if (out->left_margin_centimm < out->margin_centimm)
+        out->left_margin_centimm = out->margin_centimm;
+    if (out->right_margin_centimm < out->margin_centimm)
+        out->right_margin_centimm = out->margin_centimm;
+    return true;
+}

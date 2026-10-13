@@ -27,28 +27,33 @@ static bool probe_print_cb(const char *info, const char *uri, const char *id, vo
     return false;  /* continue listing */
 }
 
+static void probe_error_cb(const char *message, void *data)
+{
+    (void)data;
+    fprintf(stderr, "probe: %s\n", message);
+}
+
 static int probe_cb(const char *base, int num_options, cups_option_t *options,
                     int num_files, char **files, void *data)
 {
     (void)base; (void)num_options; (void)options; (void)num_files; (void)files; (void)data;
     pt_usb_register();
     printf("probing ptouch:// (CUSTOM_LOCAL only)...\n");
-    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, probe_print_cb, NULL, NULL, NULL);
+    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, probe_print_cb, NULL, probe_error_cb, NULL);
     printf("probe done\n");
     printf("PRESENT 04f9:2041 = %s\n", pt_usb_present(0x04f9, 0x2041) ? "yes" : "no");
     return 0;
 }
 
-/* Capture the first ptouch:// device for in-process create. */
-typedef struct { char uri[256]; char id[256]; bool found; } pt_found;
-static bool grab_cb(const char *info, const char *uri, const char *id, void *data)
+static void discovery_error_cb(const char *message, void *data)
 {
-    (void)info;
-    pt_found *f = data;
-    strncpy(f->uri, uri, sizeof f->uri - 1);
-    strncpy(f->id, id ? id : "", sizeof f->id - 1);
-    f->found = true;
-    return true;  /* stop at the first */
+    papplLog(data, PAPPL_LOGLEVEL_ERROR, "%s", message);
+}
+
+static bool discovery_cb(const char *info, const char *uri, const char *id, void *data)
+{
+    (void)info; (void)uri; (void)id; (void)data;
+    return false;
 }
 
 static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *data)
@@ -57,19 +62,17 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     pappl_system_t *sys = papplSystemCreate(
         PAPPL_SOPTIONS_MULTI_QUEUE | PAPPL_SOPTIONS_WEB_INTERFACE,
         "ptouch", 8000, "_print,_universal",
-        NULL, "/tmp/ptouch.log", PAPPL_LOGLEVEL_DEBUG, NULL, false);
+        NULL, "-", PAPPL_LOGLEVEL_INFO, NULL, false);
     if (!sys)
         return NULL;
 
+    /* PAPPL 1.4.11 localizes its optional footer without checking for NULL. */
+    papplSystemSetFooterHTML(sys, "");
     papplSystemAddListeners(sys, NULL);
     pt_usb_register();  /* register the scheme BEFORE any list/open */
     papplSystemSetPrinterDrivers(sys, NDRIVERS, g_drivers, NULL /*autoadd*/, NULL, pt_driver_cb, NULL);
 
-    /* #40: take over image/png so the label length follows the image. Must run
-     * before papplSystemRun, and must target our own PT_RASTER_FORMAT: PAPPL
-     * already has image/png -> image/pwg-raster and matches filters on src+dst
-     * only, so re-registering that pair would be silently dropped. */
-    papplSystemAddMIMEFilter(sys, "image/png", PT_RASTER_FORMAT, pt_filter_png, NULL);
+    papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
 
     /* Test override: create the printer on an explicit URI (e.g. a socket sink)
      * instead of enumerating ptouch://. Lets the geometry gate run against
@@ -85,38 +88,19 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
         return sys;
     }
 
-    /* In-process create from OUR scheme only (never the built-in usb:// hang). */
-    pt_found found = {0};
-    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, grab_cb, &found, NULL, NULL);
-    if (found.found) {
-        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
-                                                found.id, found.uri);
-        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-                 "%s printer for %s", p ? "Created" : "FAILED to create", found.uri);
-    } else {
-        /* No device attached: still create the printer so clients see a real
-         * queue reporting `offline` instead of client-error-not-found, and so a
-         * power-cycle recovers without restarting (status_cb clears OFFLINE on
-         * the next attribute query). #38 */
-        const char *model = getenv("PTOUCH_MODEL");
-        if (!model || !*model)
-            model = "PT-2730";
-        if (!pt_lookup_name(model)) {
-            papplLog(sys, PAPPL_LOGLEVEL_WARN,
-                     "PTOUCH_MODEL=%s is not a known model; using PT-2730", model);
-            model = "PT-2730";
-        }
-        char uri[256], id[256];
-        snprintf(uri, sizeof uri, "ptouch://Brother/%s", model);
-        snprintf(id, sizeof id, "MFG:Brother;MDL:%s;CMD:PT-CBP;", model);
-        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch", id, uri);
-        if (p)  /* mark offline NOW: without it reasons are `none`, the live-read gate in
-                 * r_startjob never fires, and the width guard silently uses the default 12mm media */
-            papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_MEDIA_EMPTY);
-        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-                 "%s offline printer for %s (no device at startup; awaiting connection)",
-                 p ? "Created" : "FAILED to create", uri);
-    }
+    /* Always create the configured supported model's stable queue. Discovery
+     * supplies diagnostics, never a first-device fallback or a different model. */
+    const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
+    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, discovery_cb, NULL, discovery_error_cb, sys);
+    ssize_t matches = pt_usb_count(model->vid, model->pid);
+    pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
+                                           "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;",
+                                           "ptouch://Brother/PT-2730");
+    if (p && matches != 1)
+        papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
+    papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
+             "%s printer for ptouch://Brother/PT-2730 (%zd matching USB devices)",
+             p ? "Created" : "FAILED to create", matches);
     return sys;
 }
 
@@ -138,15 +122,16 @@ static void smoke_err_cb(const char *message, void *data)
 static int run_smoke(void)
 {
     pt_usb_register();
-    pt_found found = {0};
-    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, grab_cb, &found, smoke_err_cb, NULL);
-    if (!found.found) {
-        fprintf(stderr, "smoke: no ptouch device found\n");
+    const char *uri = "ptouch://Brother/PT-2730";
+    const pt_dev *model = pt_usb_supported_model(getenv("PTOUCH_MODEL"));
+    ssize_t count = pt_usb_count(model->vid, model->pid);
+    if (count != 1) {
+        fprintf(stderr, "smoke: expected one PT-2730, found %zd (none or ambiguous)\n", count);
         return 2;
     }
-    pappl_device_t *dev = papplDeviceOpen(found.uri, "smoke", smoke_err_cb, NULL);
+    pappl_device_t *dev = papplDeviceOpen(uri, "smoke", smoke_err_cb, NULL);
     if (!dev) {
-        fprintf(stderr, "smoke: open failed for %s\n", found.uri);
+        fprintf(stderr, "smoke: open failed for %s\n", uri);
         return 3;
     }
     uint8_t init[8];
@@ -157,12 +142,18 @@ static int run_smoke(void)
     papplDeviceGetMetrics(dev, &m);
     papplDeviceClose(dev);
     printf("smoke: device write_bytes=%zu write_requests=%zu to %s\n",
-           m.write_bytes, m.write_requests, found.uri);
+           m.write_bytes, m.write_requests, uri);
     return (!smoke_saw_error && m.write_bytes >= n) ? 0 : 1;  /* 1 = no real write */
 }
 
 int main(int argc, char *argv[])
 {
+    const char *configured = getenv("PTOUCH_MODEL");
+    if (!pt_usb_supported_model(configured)) {
+        fprintf(stderr, "PTOUCH_MODEL=%s is %s; only PT-2730 is print-supported\n",
+                configured, pt_lookup_name(configured) ? "recognized but unsupported" : "unknown");
+        return EXIT_FAILURE;
+    }
     if (argc >= 2 && strcmp(argv[1], "smoke") == 0)
         return run_smoke();
     return papplMainloop(argc, argv, "1.0", NULL,

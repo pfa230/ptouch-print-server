@@ -1,0 +1,387 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile.deploy
+#1 transferring dockerfile: 2.76kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 DONE 0.4s
+
+#3 docker-image://docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+#3 resolve docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e 0.1s done
+#3 CACHED
+
+#4 [internal] load metadata for docker.io/library/debian:bookworm
+#4 ...
+
+#5 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#5 DONE 0.3s
+
+#4 [internal] load metadata for docker.io/library/debian:bookworm
+#4 DONE 0.3s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 79B done
+#6 DONE 0.0s
+
+#7 [runtime  1/13] FROM docker.io/library/debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+#7 resolve docker.io/library/debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 0.0s done
+#7 DONE 0.0s
+
+#8 [build  1/11] FROM docker.io/library/debian:bookworm@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858
+#8 resolve docker.io/library/debian:bookworm@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858 0.0s done
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 745.56kB 0.0s done
+#9 DONE 0.0s
+
+#10 [build  2/11] RUN apt-get update && apt-get install -y --no-install-recommends       build-essential cmake pkg-config git ca-certificates python3       libusb-1.0-0-dev libpng-dev libjpeg-dev zlib1g-dev       libcups2-dev libcupsimage2-dev libssl-dev libavahi-client-dev libgnutls28-dev libkrb5-dev  && rm -rf /var/lib/apt/lists/*
+#10 CACHED
+
+#11 [build  3/11] COPY patches/cups-2.4.2-deb12u9-raster.patch /tmp/cups-raster.patch
+#11 CACHED
+
+#12 [build  4/11] COPY scripts/build-cups.sh /tmp/build-cups.sh
+#12 CACHED
+
+#13 [build  5/11] RUN /tmp/build-cups.sh /tmp/cups-raster.patch
+#13 CACHED
+
+#14 [build  6/11] COPY patches/pappl-1.4.11-raster.patch /tmp/pappl-raster.patch
+#14 DONE 0.1s
+
+#15 [build  7/11] COPY patches/pappl-1.4.11-finishings.patch /tmp/pappl-finishings.patch
+#15 DONE 0.1s
+
+#16 [build  8/11] RUN git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl /tmp/pappl  && cd /tmp/pappl && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-raster.patch  && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-finishings.patch  && ./configure && make && make install && ldconfig  && rm -rf /tmp/pappl
+#16 0.200 Cloning into '/tmp/pappl'...
+#16 1.321 Note: switching to 'ad86a0a8473f0f83233a374226561181570d4f81'.
+#16 1.321 
+#16 1.321 You are in 'detached HEAD' state. You can look around, make experimental
+#16 1.321 changes and commit them, and you can discard any commits you make in this
+#16 1.321 state without impacting any branches by switching back to a branch.
+#16 1.321 
+#16 1.321 If you want to create a new branch to retain commits you create, you may
+#16 1.321 do so (now or later) by using -c with the switch command. Example:
+#16 1.321 
+#16 1.321   git switch -c <new-branch-name>
+#16 1.321 
+#16 1.321 Or undo this operation with:
+#16 1.321 
+#16 1.321   git switch -
+#16 1.321 
+#16 1.321 Turn off this advice by setting config variable advice.detachedHead to false
+#16 1.321 
+#16 1.356 patching file pappl/job-process.c
+#16 1.356 patching file pappl/job-filter.c
+#16 1.358 patching file pappl/printer-driver.c
+#16 1.358 patching file pappl/printer-ipp.c
+#16 1.359 patching file pappl/job-process.c
+#16 1.359 patching file pappl/finishings-private.h
+#16 1.359 patching file pappl/system-loadsave.c
+#16 1.359 patching file pappl/printer-webif.c
+#16 1.456 checking build system type... x86_64-pc-linux-gnu
+#16 1.542 checking host system type... x86_64-pc-linux-gnu
+#16 1.546 checking for gcc... gcc
+#16 1.575 checking whether the C compiler works... yes
+#16 1.620 checking for C compiler default output file name... a.out
+#16 1.621 checking for suffix of executables... 
+#16 1.656 checking whether we are cross compiling... no
+#16 1.700 checking for suffix of object files... o
+#16 1.722 checking whether the compiler supports GNU C... yes
+#16 1.741 checking whether gcc accepts -g... yes
+#16 1.761 checking for gcc option to enable C11 features... none needed
+#16 1.791 checking for ranlib... ranlib
+#16 1.792 checking for ar... /usr/bin/ar
+#16 1.792 checking for codesign... no
+#16 1.792 checking for true... /usr/bin/true
+#16 1.793 checking for mkdir... /usr/bin/mkdir
+#16 1.793 checking for rm... /usr/bin/rm
+#16 1.793 checking for rmdir... /usr/bin/rmdir
+#16 1.793 checking for ln... /usr/bin/ln
+#16 1.794 checking for install-sh script... using /tmp/pappl/install-sh
+#16 1.795 checking for pkg-config... /usr/bin/pkg-config
+#16 1.795 checking for cups-config... /usr/bin/cups-config
+#16 1.795 checking for CUPS library v2.2 or higher... yes, v2.4
+#16 2.148 checking for strlcpy... no
+#16 2.204 checking for stdio.h... yes
+#16 2.223 checking for stdlib.h... yes
+#16 2.260 checking for string.h... yes
+#16 2.284 checking for inttypes.h... yes
+#16 2.309 checking for stdint.h... yes
+#16 2.335 checking for strings.h... yes
+#16 2.360 checking for sys/stat.h... yes
+#16 2.387 checking for sys/types.h... yes
+#16 2.413 checking for unistd.h... yes
+#16 2.447 checking for pthread.h... yes
+#16 2.482 checking for pthread_create using -lpthreads... no
+#16 2.525 checking for pthread_create using -lpthread... yes
+#16 2.571 checking for Avahi... yes
+#16 2.577 checking for OpenSSL/LibreSSL package... yes
+#16 2.584 checking for sys/random.h... yes
+#16 2.623 checking for arc4random... yes
+#16 2.679 checking for getrandom... yes
+#16 2.726 checking for gnutls_rnd... no
+#16 2.777 checking for sys/mount.h... yes
+#16 2.817 checking for sys/statfs.h... yes
+#16 2.847 checking for sys/statvfs.h... yes
+#16 2.878 checking for sys/vfs.h... yes
+#16 2.908 checking for statfs... yes
+#16 2.957 checking for statvfs... yes
+#16 3.006 checking for libjpeg via pkg-config... yes
+#16 3.013 checking for libpng-1.6.x... yes
+#16 3.020 checking for libusb-1.0... yes
+#16 3.026 checking for dlopen in -ldl... yes
+#16 3.079 checking for pam_start in -lpam... no
+#16 3.121 checking for security/pam_appl.h... no
+#16 3.154 checking for pam/pam_appl.h... no
+#16 3.185 checking whether compiler supports -Wno-char-subscripts... yes
+#16 3.206 checking whether compiler supports -Wno-format-truncation... yes
+#16 3.226 checking whether compiler supports -Wno-format-y2k... yes
+#16 3.250 checking whether compiler supports -Wno-switch... yes
+#16 3.270 checking whether compiler supports -Wno-unused-result... yes
+#16 3.290 checking whether compiler supports -fPIE... yes
+#16 3.312 checking for OS-specific compiler options... -D__USE_MISC -D_GNU_SOURCE -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64 -Wl,-z,relro,-z,now
+#16 3.328 configure: creating ./config.status
+#16 3.417 config.status: creating Makedefs
+#16 3.428 config.status: creating pappl/pappl.pc
+#16 3.447 config.status: creating config.h
+#16 3.476 Using CC=gcc
+#16 3.477 Using CFLAGS=-fPIC  -I..   -D_THREAD_SAFE -D_REENTRANT -D_REENTRANT    -I/usr/include/libpng16  -I/usr/include/libusb-1.0  -D_FORTIFY_SOURCE=2 -D__USE_MISC -D_GNU_SOURCE -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64 -g -Os -Wall -Wunused -Wno-char-subscripts -Wno-format-truncation -Wno-format-y2k -Wno-switch -Wno-unused-result
+#16 3.478 Using DSOFLAGS=-fPIC  -I..   -D_THREAD_SAFE -D_REENTRANT -D_REENTRANT    -I/usr/include/libpng16  -I/usr/include/libusb-1.0  -D_FORTIFY_SOURCE=2 -D__USE_MISC -D_GNU_SOURCE -D_TIME_BITS=64 -D_FILE_OFFSET_BITS=64 -g -Os -Wall -Wunused -Wno-char-subscripts -Wno-format-truncation -Wno-format-y2k -Wno-switch -Wno-unused-result
+#16 3.479 Using LDFLAGS=-fPIE -pie   -Wl,-z,relro,-z,now -g -Os
+#16 3.480 Using LIBS=-ldl -lpthread  -lcups -lavahi-common -lavahi-client  -lssl -lcrypto  -ljpeg  -lpng16  -lz -lusb-1.0 
+#16 3.480 Making all in doc...
+#16 3.482 Making all in man...
+#16 3.485 Making all in pappl...
+#16 3.487 make[1]: Entering directory '/tmp/pappl/pappl'
+#16 3.488 Compiling client.c...
+#16 3.737 Compiling client-accessors.c...
+#16 3.851 Compiling client-auth.c...
+#16 3.948 Compiling client-loc.c...
+#16 4.047 Compiling client-ipp.c...
+#16 4.187 Compiling client-webif.c...
+#16 4.506 Compiling contact.c...
+#16 4.589 Compiling device.c...
+#16 4.779 Compiling device-file.c...
+#16 4.907 Compiling device-network.c...
+#16 5.260 Compiling device-usb.c...
+#16 5.454 Compiling dnssd.c...
+#16 5.676 Compiling httpmon.c...
+#16 5.824 Compiling job-accessors.c...
+#16 5.995 Compiling job-filter.c...
+#16 6.240 Compiling job-ipp.c...
+#16 6.434 Compiling job-process.c...
+#16 6.726 Compiling job.c...
+#16 6.977 Compiling link.c...
+#16 7.074 Compiling loc.c...
+#16 7.274 Compiling log.c...
+#16 7.471 Compiling lookup.c...
+#16 7.548 Compiling mainloop.c...
+#16 7.696 Compiling mainloop-subcommands.c...
+#16 8.063 Compiling mainloop-support.c...
+#16 8.274 Compiling printer.c...
+#16 8.474 Compiling printer-accessors.c...
+#16 8.707 Compiling printer-driver.c...
+#16 9.203 Compiling printer-ipp.c...
+#16 9.804 Compiling printer-raw.c...
+#16 9.929 Compiling printer-support.c...
+#16 10.07 Compiling printer-usb.c...
+#16 10.38 Compiling printer-webif.c...
+#16 10.85 Compiling resource.c...
+#16 10.99 Compiling snmp.c...
+#16 11.21 Compiling subscription.c...
+#16 11.33 Compiling subscription-ipp.c...
+#16 11.50 Compiling system.c...
+#16 11.81 Compiling system-accessors.c...
+#16 12.22 Compiling system-ipp.c...
+#16 12.49 Compiling system-loadsave.c...
+#16 12.83 Compiling system-loc.c...
+#16 12.91 Compiling system-printer.c...
+#16 13.02 Compiling system-subscription.c...
+#16 13.15 Compiling system-webif.c...
+#16 13.78 Compiling util.c...
+#16 13.89 Linking libpappl.so.1...
+#16 13.98 Archiving libpappl.a...
+#16 14.04 make[1]: Leaving directory '/tmp/pappl/pappl'
+#16 14.04 Making all in testsuite...
+#16 14.04 make[1]: Entering directory '/tmp/pappl/testsuite'
+#16 14.04 Compiling testhttpmon.c...
+#16 14.14 Linking testhttpmon...
+#16 14.17 Compiling testmainloop.c...
+#16 14.25 Compiling pwg-driver.c...
+#16 14.47 Linking testmainloop...
+#16 14.60 Compiling testpappl.c...
+#16 15.39 Linking testpappl...
+#16 15.51 make[1]: Leaving directory '/tmp/pappl/testsuite'
+#16 15.52 Installing in doc...
+#16 15.52 make[1]: Entering directory '/tmp/pappl/doc'
+#16 15.52 Installing documentation in //usr/local/share/doc/pappl...
+#16 15.56 make[1]: Leaving directory '/tmp/pappl/doc'
+#16 15.56 Installing in man...
+#16 15.56 make[1]: Entering directory '/tmp/pappl/man'
+#16 15.56 Installing man pages in //usr/local/share/man/man1...
+#16 15.58 Installing man pages in //usr/local/share/man/man3...
+#16 15.66 make[1]: Leaving directory '/tmp/pappl/man'
+#16 15.66 Installing in pappl...
+#16 15.67 make[1]: Entering directory '/tmp/pappl/pappl'
+#16 15.67 Installing pappl-makeresheader in /usr/local/bin...
+#16 15.68 Installing libpappl in /usr/local/lib...
+#16 15.71 Installing pkg-config files in /usr/local/lib/pkgconfig...
+#16 15.72 Installing data files in /usr/local/share/pappl...
+#16 15.76 Installing header files in /usr/local/include/pappl...
+#16 15.86 make[1]: Leaving directory '/tmp/pappl/pappl'
+#16 15.86 Installing in testsuite...
+#16 DONE 16.1s
+
+#17 [build  9/11] WORKDIR /src
+#17 DONE 0.1s
+
+#18 [build 10/11] COPY . .
+#18 DONE 0.0s
+
+#19 [build 11/11] RUN cmake -S . -B build-app -DPTOUCH_CORE_ONLY=OFF && cmake --build build-app  && ctest --test-dir build-app --output-on-failure  && install -Dm755 build-app/ptouch-app /out/usr/local/bin/ptouch-app
+#19 0.252 -- The C compiler identification is GNU 12.2.0
+#19 0.266 -- Detecting C compiler ABI info
+#19 0.347 -- Detecting C compiler ABI info - done
+#19 0.355 -- Check for working C compiler: /usr/bin/cc - skipped
+#19 0.356 -- Detecting C compile features
+#19 0.357 -- Detecting C compile features - done
+#19 0.455 -- Found Python3: /usr/bin/python3 (found version "3.11.2") found components: Interpreter 
+#19 0.461 -- Found PkgConfig: /usr/bin/pkg-config (found version "1.8.1") 
+#19 0.461 -- Checking for module 'pappl'
+#19 0.474 --   Found pappl, version 1.4.11
+#19 0.509 -- Checking for module 'libusb-1.0'
+#19 0.521 --   Found libusb-1.0, version 1.0.26
+#19 0.553 -- Checking for module 'libpng'
+#19 0.565 --   Found libpng, version 1.6.39
+#19 0.598 -- Configuring done
+#19 0.619 -- Generating done
+#19 0.622 -- Build files have been written to: /src/build-app
+#19 0.681 [  2%] Building C object CMakeFiles/ptcore.dir/src/tables.c.o
+#19 0.716 [  5%] Building C object CMakeFiles/ptcore.dir/src/protocol.c.o
+#19 0.752 [  8%] Building C object CMakeFiles/ptcore.dir/src/raster.c.o
+#19 0.785 [ 10%] Building C object CMakeFiles/ptcore.dir/src/status.c.o
+#19 0.816 [ 13%] Building C object CMakeFiles/ptcore.dir/src/cutter.c.o
+#19 0.844 [ 16%] Linking C static library libptcore.a
+#19 0.885 [ 16%] Built target ptcore
+#19 0.909 [ 18%] Building C object CMakeFiles/test_driver.dir/tests/test_driver.c.o
+#19 1.164 [ 21%] Building C object CMakeFiles/test_driver.dir/src/filter_png.c.o
+#19 1.248 [ 24%] Linking C executable test_driver
+#19 1.333 [ 24%] Built target test_driver
+#19 1.357 [ 27%] Building C object CMakeFiles/test_pappl_raster.dir/tests/test_pappl_raster.c.o
+#19 1.455 [ 29%] Linking C executable test_pappl_raster
+#19 1.539 [ 29%] Built target test_pappl_raster
+#19 1.562 [ 32%] Building C object CMakeFiles/test_pappl_finishings.dir/tests/test_pappl_finishings.c.o
+#19 1.650 [ 35%] Linking C executable test_pappl_finishings
+#19 1.733 [ 35%] Built target test_pappl_finishings
+#19 1.758 [ 37%] Building C object CMakeFiles/test_png_geometry.dir/tests/test_png_geometry.c.o
+#19 1.864 [ 40%] Building C object CMakeFiles/test_png_geometry.dir/src/driver.c.o
+#19 1.972 [ 43%] Building C object CMakeFiles/test_png_geometry.dir/src/filter_png.c.o
+#19 2.055 [ 45%] Linking C executable test_png_geometry
+#19 2.152 [ 45%] Built target test_png_geometry
+#19 2.175 [ 48%] Building C object CMakeFiles/test_device_usb.dir/tests/test_device_usb.c.o
+#19 2.265 [ 51%] Linking C executable test_device_usb
+#19 2.345 [ 51%] Built target test_device_usb
+#19 2.368 [ 54%] Building C object CMakeFiles/ptouch-app.dir/src/main.c.o
+#19 2.431 [ 56%] Building C object CMakeFiles/ptouch-app.dir/src/driver.c.o
+#19 2.534 [ 59%] Building C object CMakeFiles/ptouch-app.dir/src/device_usb.c.o
+#19 2.605 [ 62%] Building C object CMakeFiles/ptouch-app.dir/src/filter_png.c.o
+#19 2.688 [ 64%] Linking C executable ptouch-app
+#19 2.771 [ 64%] Built target ptouch-app
+#19 2.794 [ 67%] Building C object tests/CMakeFiles/test_tables.dir/test_tables.c.o
+#19 2.828 [ 70%] Linking C executable test_tables
+#19 2.868 [ 70%] Built target test_tables
+#19 2.892 [ 72%] Building C object tests/CMakeFiles/test_protocol.dir/test_protocol.c.o
+#19 2.929 [ 75%] Linking C executable test_protocol
+#19 2.969 [ 75%] Built target test_protocol
+#19 2.994 [ 78%] Building C object tests/CMakeFiles/test_raster.dir/test_raster.c.o
+#19 3.031 [ 81%] Linking C executable test_raster
+#19 3.071 [ 81%] Built target test_raster
+#19 3.095 [ 83%] Building C object tests/CMakeFiles/test_status.dir/test_status.c.o
+#19 3.132 [ 86%] Linking C executable test_status
+#19 3.175 [ 86%] Built target test_status
+#19 3.200 [ 89%] Building C object tests/CMakeFiles/test_cutter.dir/test_cutter.c.o
+#19 3.231 [ 91%] Linking C executable test_cutter
+#19 3.270 [ 91%] Built target test_cutter
+#19 3.294 [ 94%] Building C object tests/CMakeFiles/ptouch-cut-probe.dir/cut_probe.c.o
+#19 3.376 [ 97%] Building C object tests/CMakeFiles/ptouch-cut-probe.dir/__/src/device_usb.c.o
+#19 3.450 [100%] Linking C executable ptouch-cut-probe
+#19 3.534 [100%] Built target ptouch-cut-probe
+#19 3.590 Internal ctest changing into directory: /src/build-app
+#19 3.590 Test project /src/build-app
+#19 3.591       Start  1: driver_finishings
+#19 33.45  1/11 Test  #1: driver_finishings ................   Passed   29.86 sec
+#19 33.45       Start  2: pappl_raster
+#19 63.45  2/11 Test  #2: pappl_raster .....................   Passed   30.00 sec
+#19 63.45       Start  3: pappl_finishings
+#19 93.42  3/11 Test  #3: pappl_finishings .................   Passed   29.97 sec
+#19 93.42       Start  4: png_geometry
+#19 123.4  4/11 Test  #4: png_geometry .....................   Passed   30.03 sec
+#19 123.4       Start  5: device_usb
+#19 123.5  5/11 Test  #5: device_usb .......................   Passed    0.01 sec
+#19 123.5       Start  6: tables
+#19 123.5  6/11 Test  #6: tables ...........................   Passed    0.00 sec
+#19 123.5       Start  7: protocol
+#19 123.5  7/11 Test  #7: protocol .........................   Passed    0.00 sec
+#19 123.5       Start  8: raster
+#19 123.5  8/11 Test  #8: raster ...........................   Passed    0.00 sec
+#19 123.5       Start  9: status
+#19 123.5  9/11 Test  #9: status ...........................   Passed    0.00 sec
+#19 123.5       Start 10: cutter
+#19 123.5 10/11 Test #10: cutter ...........................   Passed    0.00 sec
+#19 123.5       Start 11: cut_probe_capture
+#19 124.1 11/11 Test #11: cut_probe_capture ................   Passed    0.63 sec
+#19 124.1 
+#19 124.1 100% tests passed, 0 tests failed out of 11
+#19 124.1 
+#19 124.1 Total Test time (real) = 120.50 sec
+#19 DONE 124.1s
+
+#20 [runtime  3/13] COPY --from=build /usr/local/lib/libcups.so* /usr/local/lib/
+#20 CACHED
+
+#21 [runtime  4/13] COPY --from=build /usr/local/lib/libcupsimage.so* /usr/local/lib/
+#21 CACHED
+
+#22 [runtime  5/13] COPY --from=build /usr/local/share/ptouch/cups-source-version /usr/local/share/ptouch/cups-source-version
+#22 CACHED
+
+#23 [runtime  2/13] RUN apt-get update && apt-get install -y --no-install-recommends       libusb-1.0-0 libcups2 libcupsimage2 libavahi-client3       libpng16-16 libjpeg62-turbo zlib1g libssl3       avahi-daemon dbus ca-certificates  && rm -rf /var/lib/apt/lists/*
+#23 CACHED
+
+#24 [runtime  6/13] RUN test "$(dpkg-query -W -f='${source:Version}' libcups2)" = "$(cat /usr/local/share/ptouch/cups-source-version)"
+#24 CACHED
+
+#25 [runtime  7/13] COPY --from=build /usr/local/lib/libpappl.so* /usr/local/lib/
+#25 DONE 0.1s
+
+#26 [runtime  8/13] COPY --from=build /out/usr/local/bin/ptouch-app /usr/local/bin/ptouch-app
+#26 DONE 0.0s
+
+#27 [runtime  9/13] RUN ldconfig
+#27 DONE 0.3s
+
+#28 [runtime 10/13] RUN sh -c 'ldd /usr/local/bin/ptouch-app | grep -i "not found" && exit 1 || true'
+#28 DONE 0.2s
+
+#29 [runtime 11/13] COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+#29 DONE 0.0s
+
+#30 [runtime 12/13] COPY THIRD_PARTY_NOTICES.md /THIRD_PARTY_NOTICES.md
+#30 DONE 0.0s
+
+#31 [runtime 13/13] RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+#31 DONE 0.2s
+
+#32 exporting to image
+#32 exporting layers
+#32 exporting layers 0.3s done
+#32 exporting manifest sha256:c9d5f1fc82d28d47f7d7f36fed4bb6d2cf84dd3b2653a1d879dbe3a3c94e9470 0.0s done
+#32 exporting config sha256:a448078c482a1f6019af942caf771a5e85a71e7eaf67e22a13655df3cf78d26f done
+#32 exporting attestation manifest sha256:19a22f552aa2922debf88f82b99ca002d564f7da59438207350d759c654bfb32 0.0s done
+#32 exporting manifest list sha256:babe9d5a3dfdd36d0602e4e76d33a658f754b77298664df30ef055bd7adf3308 0.0s done
+#32 naming to docker.io/library/ptouch-review-fixed-deploy:20261013 done
+#32 unpacking to docker.io/library/ptouch-review-fixed-deploy:20261013 0.1s done
+#32 DONE 0.5s

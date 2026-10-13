@@ -1,0 +1,4 @@
+patching file pappl/job-process.c
+Hunk #2 FAILED at 599.
+1 out of 9 hunks FAILED -- saving rejects to file pappl/job-process.c.rej
+patching file pappl/job-filter.c

@@ -3,9 +3,9 @@
 
 #include <pappl/pappl.h>
 
-/* Document filter for image/png -> PT_RASTER_FORMAT (pappl_mime_filter_cb_t).
- * Same decode as PAPPL's built-in PNG filter, but the page length comes from the
- * image's own physical size instead of the media default (#40). */
+/* Standard image/png -> image/png route with explicit-media precedence and
+ * source-content preflight. PAPPL supplies placement and raster callbacks. */
 bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data);
+bool pt_png_printfile(pappl_job_t *job, pappl_pr_options_t *options, pappl_device_t *device);
 
 #endif /* PT_FILTER_PNG_H */

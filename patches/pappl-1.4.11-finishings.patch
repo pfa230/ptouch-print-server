@@ -1,0 +1,520 @@
+--- a/pappl/printer-driver.c
++++ b/pappl/printer-driver.c
+@@ -8,6 +8,7 @@
+ //
+ 
+ #include "printer-private.h"
++#include "finishings-private.h"
+ #include "system-private.h"
+ 
+ 
+@@ -172,8 +173,17 @@
+     pappl_pr_driver_data_t *data,	// I - Driver data
+     ipp_t                  *attrs)	// I - Additional capability attributes or `NULL` for none
+ {
++  int trim_default = -1;
++  bool trim_presets = _papplTrimPresets(attrs);
+   if (!printer || !data)
+     return (false);
++  if (trim_presets)
++  {
++    ipp_attribute_t *enums = ippFindAttribute(attrs, "finishings-default", IPP_TAG_ZERO);
++    ipp_attribute_t *col = ippFindAttribute(attrs, "finishings-col-default", IPP_TAG_ZERO);
++    trim_default = enums || col ? _papplTrimDefault(attrs, enums, col) : 3;
++    if (trim_default <= 0) return (false);
++  }
+ 
+   // Validate data...
+   if (!validate_defaults(printer, data, data) || !validate_driver(printer, data) || !validate_ready(printer, data, data->num_source, data->media_ready))
+@@ -190,10 +200,33 @@
+   printer->driver_attrs = make_attrs(printer->system, printer, &printer->driver_data);
+ 
+   if (attrs)
++  {
++    if (trim_presets)
++    {
++      ipp_attribute_t *attr, *old;
++      const char *name;
++      // Explicit trim declarations and canonical roll geometry replace generated attributes.
++      for (attr = ippGetFirstAttribute(attrs); attr; attr = ippGetNextAttribute(attrs))
++      {
++        name = ippGetName(attr);
++        if (name && (!strncmp(name, "finishings-", 10) || !strcmp(name, "finishing-template-supported") ||
++                     !strcmp(name, "media-col-database") || !strcmp(name, "media-size-supported") ||
++                     !strcmp(name, "media-left-margin-supported") || !strcmp(name, "media-right-margin-supported")))
++          while ((old = ippFindAttribute(printer->driver_attrs, name, IPP_TAG_ZERO)) != NULL)
++            ippDeleteAttribute(printer->driver_attrs, old);
++      }
++      // Drop PAPPL's misspelled legacy collection names for this explicit path.
++      while ((old = ippFindAttribute(printer->driver_attrs, "finishing-col-database", IPP_TAG_ZERO)) != NULL) ippDeleteAttribute(printer->driver_attrs, old);
++      while ((old = ippFindAttribute(printer->driver_attrs, "finishing-col-supported", IPP_TAG_ZERO)) != NULL) ippDeleteAttribute(printer->driver_attrs, old);
++    }
+     ippCopyAttributes(printer->driver_attrs, attrs, 0, NULL, NULL);
++  }
++
++  if (trim_presets)
++    _papplSetTrimDefault(printer->driver_attrs, trim_default);
+ 
+   // Add finishings-col-default and finishings-default if missing...
+-  if (!ippFindAttribute(printer->driver_attrs, "finishings-col-default", IPP_TAG_BEGIN_COLLECTION))
++  if (!trim_presets && !ippFindAttribute(printer->driver_attrs, "finishings-col-default", IPP_TAG_BEGIN_COLLECTION))
+   {
+     ipp_t	*col = ippNew();	// finishings-col-default value
+ 
+@@ -244,6 +277,19 @@
+     return (false);
+ 
+   _papplRWLockWrite(printer);
++
++  // Prevalidate the existing public setter's finishing option atomically.
++  int trim_default = -1;
++  bool trim_presets = _papplTrimPresets(printer->driver_attrs);
++  if (trim_presets && (value = cupsGetOption("finishings", (cups_len_t)num_vendor, vendor)) != NULL)
++  {
++    trim_default = _papplTrimDefaultString(printer->driver_attrs, value);
++    if (trim_default <= 0)
++    {
++      _papplRWUnlock(printer);
++      return (false);
++    }
++  }
+ 
+   // Copy xxx_default values...
+   printer->driver_data.bin_default            = data->bin_default;
+@@ -263,9 +309,14 @@
+   printer->driver_data.x_default              = data->x_default;
+   printer->driver_data.y_default              = data->y_default;
+ 
++  if (trim_default > 0)
++    _papplSetTrimDefault(printer->driver_attrs, trim_default);
++
+   // Copy any vendor-specific xxx-default values...
+   for (i = 0; i < data->num_vendor; i ++)
+   {
++    if (trim_presets && !strcmp(data->vendor[i], "finishings"))
++      continue;
+     if ((value = cupsGetOption(data->vendor[i], (cups_len_t)num_vendor, vendor)) == NULL)
+       continue;
+ 
+--- a/pappl/printer-ipp.c
++++ b/pappl/printer-ipp.c
+@@ -9,6 +9,7 @@
+ //
+ 
+ #include "pappl-private.h"
++#include "finishings-private.h"
+ 
+ 
+ //
+@@ -989,6 +990,27 @@
+   };
+ 
+ 
++  int trim_default = -1;
++  bool trim_presets;
++  ipp_attribute_t *trim_enum = ippFindAttribute(client->request, "finishings-default", IPP_TAG_ZERO);
++  ipp_attribute_t *trim_col = ippFindAttribute(client->request, "finishings-col-default", IPP_TAG_ZERO);
++
++  // Validate both default representations before changing either one.
++  _papplRWLockRead(printer);
++  trim_presets = _papplTrimPresets(printer->driver_attrs);
++  if (trim_presets && (trim_enum || trim_col))
++    trim_default = _papplTrimDefault(printer->driver_attrs, trim_enum, trim_col);
++  _papplRWUnlock(printer);
++  if (trim_presets && (trim_enum || trim_col))
++  {
++    if (trim_default <= 0)
++    {
++      if (trim_enum) papplClientRespondIPPUnsupported(client, trim_enum);
++      if (trim_col) papplClientRespondIPPUnsupported(client, trim_col);
++      return (false);
++    }
++  }
++
+   // Preflight request attributes...
+   create_printer = ippGetOperation(client->request) == IPP_OP_CREATE_PRINTER;
+ 
+@@ -1017,6 +1039,9 @@
+       papplClientRespondIPPUnsupported(client, rattr);
+       continue;
+     }
++
++    if (trim_presets && (!strcmp(name, "finishings-default") || !strcmp(name, "finishings-col-default")))
++      continue; // Already validated together above.
+ 
+     // Validate syntax of provided attributes...
+     value_tag = ippGetValueTag(rattr);
+@@ -1437,6 +1462,14 @@
+   if (org_unit)
+     papplPrinterSetGeoLocation(printer, org_unit);
+ 
++  if (trim_default > 0)
++  {
++    _papplRWLockWrite(printer);
++    _papplSetTrimDefault(printer->driver_attrs, trim_default);
++    printer->config_time = time(NULL);
++    _papplRWUnlock(printer);
++    _papplSystemConfigChanged(printer->system);
++  }
+   papplSystemAddEvent(printer->system, printer, NULL, PAPPL_EVENT_PRINTER_CONFIG_CHANGED, NULL);
+ 
+   return (true);
+@@ -2082,74 +2115,93 @@
+ 
+   if ((attr = ippFindAttribute(client->request, "copies", IPP_TAG_ZERO)) != NULL)
+   {
+-    if (ippGetCount(attr) != 1 || ippGetValueTag(attr) != IPP_TAG_INTEGER || ippGetInteger(attr, 0) < 1 || ippGetInteger(attr, 0) > 999)
++    const char *format = ippGetString(ippFindAttribute(client->request, "document-format", IPP_TAG_MIMETYPE), 0, NULL);
++    if (ippGetCount(attr) != 1 || ippGetValueTag(attr) != IPP_TAG_INTEGER || ippGetInteger(attr, 0) < 1 || ippGetInteger(attr, 0) > 999 ||
++        (format && (!strcmp(format, "image/pwg-raster") || !strcmp(format, "image/urf")) && ippGetInteger(attr, 0) != 1))
+     {
+       papplClientRespondIPPUnsupported(client, attr);
+       valid = false;
+     }
+   }
+ 
+-  if ((attr = ippFindAttribute(client->request, "finishings", IPP_TAG_ZERO)) != NULL)
+-  {
+-    if (ippGetValueTag(attr) != IPP_TAG_ENUM)
+-    {
+-      papplClientRespondIPPUnsupported(client, attr);
++  if (_papplTrimPresets(client->printer->driver_attrs))
++  {
++    ipp_attribute_t *enums = ippFindAttribute(client->request, "finishings", IPP_TAG_ZERO);
++    ipp_attribute_t *col = ippFindAttribute(client->request, "finishings-col", IPP_TAG_ZERO);
++    if ((enums && col) ||
++        (enums && (ippGetValueTag(enums) != IPP_TAG_ENUM || _papplTrimSelection(client->printer->driver_attrs, enums) < 0)) ||
++        (col && ((ippGetValueTag(col) != IPP_TAG_BEGIN_COLLECTION && ippGetValueTag(col) != IPP_TAG_NOVALUE) || _papplTrimSelection(client->printer->driver_attrs, col) < 0)))
++    {
++      if (enums) papplClientRespondIPPUnsupported(client, enums);
++      if (col) papplClientRespondIPPUnsupported(client, col);
+       valid = false;
+     }
+-    else
+-    {
+-      for (i = 0, count = ippGetCount(attr); i < count; i ++)
+-      {
+-        int			intvalue = ippGetInteger(attr, i);
+-					// finishings value
+-        pappl_finishings_t	f;	// finishings bit value
+-
+-        if (intvalue == IPP_FINISHINGS_NONE)
+-          continue;
+-
+-        f = _papplFinishingsValue(ippEnumString("finishings", intvalue));
+-        if (!(client->printer->driver_data.finishings & f))
++  }
++  else
++  {
++    if ((attr = ippFindAttribute(client->request, "finishings", IPP_TAG_ZERO)) != NULL)
++    {
++      if (ippGetValueTag(attr) != IPP_TAG_ENUM)
++      {
++        papplClientRespondIPPUnsupported(client, attr);
++        valid = false;
++      }
++      else
++      {
++        for (i = 0, count = ippGetCount(attr); i < count; i ++)
+         {
+-	  papplClientRespondIPPUnsupported(client, attr);
+-	  valid = false;
+-          break;
++          int			intvalue = ippGetInteger(attr, i);
++  					// finishings value
++          pappl_finishings_t	f;	// finishings bit value
++
++          if (intvalue == IPP_FINISHINGS_NONE)
++            continue;
++
++          f = _papplFinishingsValue(ippEnumString("finishings", intvalue));
++          if (!(client->printer->driver_data.finishings & f))
++          {
++  	  papplClientRespondIPPUnsupported(client, attr);
++  	  valid = false;
++            break;
++          }
+         }
+       }
+-    }
+-
+-    if ((attr = ippFindAttribute(client->request, "finishings-col", IPP_TAG_ZERO)) != NULL)
+-    {
+-      papplClientRespondIPPUnsupported(client, attr);
+-      valid = false;
+-    }
+-  }
+-  else if ((attr = ippFindAttribute(client->request, "finishings-col", IPP_TAG_ZERO)) != NULL)
+-  {
+-    if (ippGetValueTag(attr) != IPP_TAG_BEGIN_COLLECTION)
+-    {
+-      papplClientRespondIPPUnsupported(client, attr);
+-      valid = false;
+-    }
+-    else
+-    {
+-      for (i = 0, count = ippGetCount(attr); i < count; i ++)
+-      {
+-        const char		*template = ippGetString(ippFindAttribute(ippGetCollection(attr, i), "finishing-template", IPP_TAG_ZERO), 0, NULL);
+-					// finishing-template value
+-        pappl_finishings_t	f;	// finishings bit value
+-
+-        if (template && !strcmp(template, "none"))
+-          continue;
+-
+-        f = _papplFinishingsValue(template);
+-        if (!(client->printer->driver_data.finishings & f))
++
++      if ((attr = ippFindAttribute(client->request, "finishings-col", IPP_TAG_ZERO)) != NULL)
++      {
++        papplClientRespondIPPUnsupported(client, attr);
++        valid = false;
++      }
++    }
++    else if ((attr = ippFindAttribute(client->request, "finishings-col", IPP_TAG_ZERO)) != NULL)
++    {
++      if (ippGetValueTag(attr) != IPP_TAG_BEGIN_COLLECTION)
++      {
++        papplClientRespondIPPUnsupported(client, attr);
++        valid = false;
++      }
++      else
++      {
++        for (i = 0, count = ippGetCount(attr); i < count; i ++)
+         {
+-	  papplClientRespondIPPUnsupported(client, attr);
+-	  valid = false;
+-          break;
++          const char		*template = ippGetString(ippFindAttribute(ippGetCollection(attr, i), "finishing-template", IPP_TAG_ZERO), 0, NULL);
++  					// finishing-template value
++          pappl_finishings_t	f;	// finishings bit value
++
++          if (template && !strcmp(template, "none"))
++            continue;
++
++          f = _papplFinishingsValue(template);
++          if (!(client->printer->driver_data.finishings & f))
++          {
++  	  papplClientRespondIPPUnsupported(client, attr);
++  	  valid = false;
++            break;
++          }
+         }
+       }
+     }
++
+   }
+ 
+   if ((attr = ippFindAttribute(client->request, "job-hold-until", IPP_TAG_ZERO)) != NULL)
+--- a/pappl/job-process.c
++++ b/pappl/job-process.c
+@@ -134,7 +134,7 @@
+   options->finishings = PAPPL_FINISHINGS_NONE;
+ 
+   if ((attr = ippFindAttribute(job->attrs, "finishings", IPP_TAG_ENUM)) == NULL)
+-    attr = ippFindAttribute(job->attrs, "finishings-col", IPP_TAG_BEGIN_COLLECTION);
++    attr = ippFindAttribute(job->attrs, "finishings-col", IPP_TAG_ZERO);
+ 
+   if (!attr)
+   {
+--- /dev/null
++++ b/pappl/finishings-private.h
+@@ -0,0 +1,132 @@
++// SPDX-License-Identifier: Apache-2.0
++// Bounded bridge for drivers declaring standard trim presets plus templates.
++// No public API or printer command policy; the driver consumes raw job attrs.
++#ifndef PAPPL_FINISHINGS_PRIVATE_H
++#define PAPPL_FINISHINGS_PRIVATE_H
++
++static inline bool
++_papplTrimPresets(ipp_t *attrs)
++{
++  ipp_attribute_t *supported = ippFindAttribute(attrs, "finishings-supported", IPP_TAG_ENUM);
++  return (ippFindAttribute(attrs, "finishings-col-database", IPP_TAG_BEGIN_COLLECTION) &&
++          ippContainsInteger(supported, 60) && ippContainsInteger(supported, 63));
++}
++
++static inline bool
++_papplHasFinishingTemplate(ipp_t *attrs, const char *name)
++{
++  ipp_attribute_t *database = ippFindAttribute(attrs, "finishings-col-database", IPP_TAG_BEGIN_COLLECTION);
++  cups_len_t i;
++  if (!name) return (false);
++  for (i = 0; i < ippGetCount(database); i ++)
++  {
++    const char *value = ippGetString(ippFindAttribute(ippGetCollection(database, i), "finishing-template", IPP_TAG_KEYWORD), 0, NULL);
++    if (value && !strcmp(value, name)) return (true);
++  }
++  return (false);
++}
++
++// -1 invalid, 0 an advertised template with no enum equivalent, else enum.
++static inline int
++_papplTrimSelection(ipp_t *attrs, ipp_attribute_t *selection)
++{
++  ipp_attribute_t *supported = ippFindAttribute(attrs, "finishings-supported", IPP_TAG_ENUM);
++  int result = 3;
++  cups_len_t i;
++  if (!selection) return (-1);
++  if (ippGetValueTag(selection) == IPP_TAG_NOVALUE)
++    return (ippGetCount(selection) == 1 && ippContainsInteger(supported, 3) ? 3 : -1);
++  if (ippGetValueTag(selection) == IPP_TAG_ENUM && ippGetCount(selection) > 0)
++  {
++    for (i = 0; i < ippGetCount(selection); i ++)
++    {
++      int value = ippGetInteger(selection, i);
++      if (!ippContainsInteger(supported, value)) return (-1);
++      if (value == 3) continue;
++      if (value != 11 && value != 60 && value != 63) return (-1);
++      if (result == 3 || (result == 63 && (value == 11 || value == 60)) || value == 60)
++        result = value;
++    }
++    return (result);
++  }
++  if (ippGetValueTag(selection) == IPP_TAG_BEGIN_COLLECTION && ippGetCount(selection) == 1)
++  {
++    ipp_t *col = ippGetCollection(selection, 0);
++    ipp_attribute_t *member;
++    const char *name;
++    for (member = ippGetFirstAttribute(col); member; member = ippGetNextAttribute(col))
++      if (!ippGetName(member) || strcmp(ippGetName(member), "finishing-template") || ippGetValueTag(member) != IPP_TAG_KEYWORD || ippGetCount(member) != 1)
++        return (-1);
++    name = ippGetString(ippFindAttribute(col, "finishing-template", IPP_TAG_KEYWORD), 0, NULL);
++    if (!_papplHasFinishingTemplate(attrs, name)) return (-1);
++    result = ippEnumValue("finishings", name);
++    return (result == 11 || result == 60 || result == 63 ? result : 0);
++  }
++  return (-1);
++}
++
++// Existing vendor/state representation is a comma-separated enum list.
++static inline int
++_papplTrimDefaultString(ipp_t *attrs, const char *value)
++{
++  int values[32], count = 0, result;
++  char *end;
++  ipp_t *request;
++  if (!value || !*value) return (-1);
++  while (*value)
++  {
++    long number;
++    errno = 0;
++    number = strtol(value, &end, 10);
++    if (errno == ERANGE || end == value || (*end && *end != ',') ||
++        (number != 3 && number != 11 && number != 60 && number != 63) || count == 32)
++      return (-1);
++    values[count ++] = (int)number;
++    if (!*end) break;
++    value = end + 1;
++    if (!*value) return (-1);
++  }
++  request = ippNew();
++  result = _papplTrimSelection(attrs, ippAddIntegers(request, IPP_TAG_JOB, IPP_TAG_ENUM, "finishings", count, values));
++  ippDelete(request);
++  return (result);
++}
++
++static inline bool
++_papplSameTrimSelection(int a, int b)
++{
++  return ((a == 11 ? 60 : a) == (b == 11 ? 60 : b));
++}
++
++static inline int
++_papplTrimDefault(ipp_t *attrs, ipp_attribute_t *enums, ipp_attribute_t *collection)
++{
++  int a, b;
++  if (enums && ippGetValueTag(enums) != IPP_TAG_ENUM) return (-1);
++  if (collection && ippGetValueTag(collection) != IPP_TAG_BEGIN_COLLECTION && ippGetValueTag(collection) != IPP_TAG_NOVALUE) return (-1);
++  a = enums ? _papplTrimSelection(attrs, enums) : -1;
++  b = collection ? _papplTrimSelection(attrs, collection) : -1;
++  if ((enums && a <= 0) || (collection && b <= 0)) return (-1);
++  if (enums && collection && !_papplSameTrimSelection(a, b)) return (-1);
++  return (enums ? a : b);
++}
++
++// Caller holds the printer write lock. Both representations change together.
++static inline void
++_papplSetTrimDefault(ipp_t *attrs, int value)
++{
++  ipp_attribute_t *old;
++  while ((old = ippFindAttribute(attrs, "finishings-default", IPP_TAG_ZERO)) != NULL) ippDeleteAttribute(attrs, old);
++  while ((old = ippFindAttribute(attrs, "finishings-col-default", IPP_TAG_ZERO)) != NULL) ippDeleteAttribute(attrs, old);
++  ippAddInteger(attrs, IPP_TAG_PRINTER, IPP_TAG_ENUM, "finishings-default", value);
++  if (value == 3)
++    ippAddOutOfBand(attrs, IPP_TAG_PRINTER, IPP_TAG_NOVALUE, "finishings-col-default");
++  else
++  {
++    ipp_t *col = ippNew();
++    ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, "finishing-template", NULL, ippEnumString("finishings", value));
++    ippAddCollection(attrs, IPP_TAG_PRINTER, "finishings-col-default", col);
++    ippDelete(col);
++  }
++}
++#endif
+--- a/pappl/system-loadsave.c
++++ b/pappl/system-loadsave.c
+@@ -8,6 +8,7 @@
+ //
+ 
+ #include "pappl-private.h"
++#include "finishings-private.h"
+ 
+ 
+ //
+@@ -235,6 +236,18 @@
+ 	  sscanf(value, "%dx%ddpi", &printer->driver_data.x_default, &printer->driver_data.y_default);
+ 	else if (!strcasecmp(line, "sides-default"))
+ 	  printer->driver_data.sides_default = _papplSidesValue(value);
++        else if (!strcasecmp(line, "finishings-default") && _papplTrimPresets(printer->driver_attrs))
++        {
++          int trim_default = _papplTrimDefaultString(printer->driver_attrs, value);
++          if (trim_default > 0)
++          {
++            _papplRWLockWrite(printer);
++            _papplSetTrimDefault(printer->driver_attrs, trim_default);
++            _papplRWUnlock(printer);
++          }
++          else
++            papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "Invalid finishings-default in state file.");
++        }
+         else if ((ptr = strstr(line, "-default")) != NULL)
+         {
+           char	defname[128],		// xxx-default name
+@@ -567,10 +580,16 @@
+     if (printer->driver_data.sides_default)
+       cupsFilePutConf(fp, "sides-default", _papplSidesString(printer->driver_data.sides_default));
+ 
++    if (_papplTrimPresets(printer->driver_attrs))
++      cupsFilePrintf(fp, "finishings-default %d\n", ippGetInteger(ippFindAttribute(printer->driver_attrs, "finishings-default", IPP_TAG_ENUM), 0));
++
+     for (j = 0; j < (cups_len_t)printer->driver_data.num_vendor; j ++)
+     {
+       char	defname[128],		// xxx-default name
+ 	      	defvalue[1024];		// xxx-default value
++
++      if (_papplTrimPresets(printer->driver_attrs) && !strcmp(printer->driver_data.vendor[j], "finishings"))
++        continue;
+ 
+       snprintf(defname, sizeof(defname), "%s-default", printer->driver_data.vendor[j]);
+       ippAttributeString(ippFindAttribute(printer->driver_attrs, defname, IPP_TAG_ZERO), defvalue, sizeof(defvalue));
+--- a/pappl/printer-webif.c
++++ b/pappl/printer-webif.c
+@@ -9,6 +9,7 @@
+ //
+ 
+ #include "pappl-private.h"
++#include "finishings-private.h"
+ 
+ 
+ //
+@@ -343,7 +344,8 @@
+ 	}
+       }
+ 
+-      if (data.finishings)
++      // The legacy form cannot represent the explicit trim presets.
++      if (data.finishings && !_papplTrimPresets(printer->driver_attrs))
+       {
+         char		name[256],	// Form variable name
+ 			finishings[256],// Finishings value(s)

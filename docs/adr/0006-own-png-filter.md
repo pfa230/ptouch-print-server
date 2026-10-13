@@ -1,39 +1,42 @@
-# 6. Own the `image/png` filter to derive label length from the image
+# 6. Standard PNG route with optional image-derived length
 
 **Status:** Accepted
 
 ## Context
 
-Clients send a PNG and no media length. PAPPL renders it onto a page whose size comes from
-`media-size` and, with `print-scaling=none`, centres it. With a fixed 100 mm default media length, a
-short label printed with large blank runs before and after it.
-
-PAPPL does not auto-size pages for continuous media: `cupsHeight` comes straight from the media, and
-the image filter only places and clips within it. By the time the driver's raster callbacks run, the
-page is fixed and the PNG's own dimensions are gone.
+PAPPL places PNGs on selected/default media. Without a concrete page length,
+continuous tape labels formerly received the fixed 100 mm default. The first
+owned filter corrected that case but overwrote explicit lengths and exposed a
+private raster MIME that could never be printed directly.
 
 ## Decision
 
-Register our own `image/png` filter and build the page from the submitted image.
+Keep libpng decoding and PAPPL's existing image renderer. Set the driver's format
+to `image/png`, register `image/png -> image/png` for the owned filter, and provide
+a real PNG `printfile_cb` using the same path. PAPPL selects the matching driver
+filter before its built-in PNG-to-PWG filter, and deduplicates the public PNG MIME.
+No private destination type or always-failing raw callback is needed.
 
-PAPPL's `papplSystemAddMIMEFilter` compares only source and destination MIME types and ignores a
-duplicate registration, so `image/png -> image/pwg-raster` cannot be overridden. Instead the driver
-declares a private `driver_data.format` and registers `image/png -> <private type>`, which job
-processing tries first. `validate_driver` requires a `printfile_cb` alongside a non-null `format`, so
-one exists and simply faults the job.
+Build options after loaded-media confirmation. Preserve submitted named media or
+`media-col.media-size.y-dimension`. Only when concrete length is omitted, derive
+length from the oriented image and its square DPI metadata, falling back to 180
+dpi. Source-only/margin-only collections do not constitute an explicit size.
+Update all length-derived header fields together; use the 5 to 300 mm limits.
 
-The filter reads the PNG, derives the label length from the image and its resolution (falling back to
-180 dpi), rewrites every length-derived header field together, then calls `papplJobFilterImage`,
-which continues to drive the existing raster callbacks.
+Pin automatic orientation from the source aspect before deriving page length:
+tall/square images use portrait and wide images use reverse-landscape (90 degrees
+clockwise), while explicit orientation remains authoritative. Decode the complete
+PNG, verify 1:1 physical content and blank nominal margins as described in ADR-0004,
+and then call `papplJobFilterImage`. Its copy loop expands the job's copies exactly
+once and drives the production raster callbacks.
 
 ## Consequences
 
-- A label is exactly as long as the submitted image, including deliberate white padding.
-- Over-length faults rather than clamping: `papplJobFilterImage` clips centred, so a clamp would
-  silently eat both ends of the design.
-- **Orientation must be pinned from the image.** PAPPL auto-rotates by comparing the image aspect to
-  the page aspect, which becomes circular once the page length is derived from the image. Real
-  clients send landscape labels; without pinning they print rotated and clipped. Landscape images
-  pin `reverse-landscape` (90° CW) so that the start of the design emerges first and prints upright (#44).
-- The private MIME type appears in `document-format-supported`.
-- Owning this filter later provided the only place able to fix media staleness (ADR-0007).
+Explicit 50 mm PNG pages stay 50 mm. Omitted lengths retain the PNG convenience,
+including deliberate white padding and minimum-length padding. Overlong or
+oversized 1:1 content fails before page output. Standard scaling requests remain
+PAPPL's responsibility. JPEG keeps its standard selected/default media sizing;
+this decision adds no JPEG decoder or automatic length promise.
+
+Real IPP tests verify MIME routing, copy counts, named and collection geometry,
+asymmetric orientation markers, physical margins, and length boundaries.

@@ -1,0 +1,881 @@
+I [2026-10-13T05:05:54.293Z] Starting log, system up 0 second(s), 0 printer(s), listening for connections on '63e88ac90ef5.local:8000' from up to 32768 clients.
+I [2026-10-13T05:05:54.297Z] Listening for connections on '*:8000'.
+I [2026-10-13T05:05:54.297Z] Listening for connections on '*:8000'.
+I [2026-10-13T05:05:54.297Z] Printer 'ptouch' at resource path '/ipp/print/ptouch'.
+W [2026-10-13T05:05:54.297Z] [Printer ptouch] Driver does not support identification.
+W [2026-10-13T05:05:54.297Z] [Printer ptouch] Driver does not support a self-test page.
+W [2026-10-13T05:05:54.297Z] [Printer ptouch] Driver does not provide printer icons, using defaults.
+I [2026-10-13T05:05:54.297Z] Created printer for socket://host.docker.internal:57703 (PTOUCH_DEVICE_URI override)
+I [2026-10-13T05:05:54.297Z] Listening for connections on '/run/ptouch-app.sock'.
+I [2026-10-13T05:05:54.297Z] Starting system.
+I [2026-10-13T05:05:54.302Z] [Client 1] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:05:54.302Z] [Client 1] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:54.302Z] [Client 1] Continue
+I [2026-10-13T05:05:54.302Z] [Client 1] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:05:54.302Z] [Client 1] OK application/ipp 10412
+I [2026-10-13T05:05:54.310Z] [Client 1] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:05:54.315Z] [Client 2] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:05:54.316Z] [Client 2] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:54.316Z] [Client 2] Continue
+I [2026-10-13T05:05:54.317Z] [Job 1] Received 153 bytes of document data.
+I [2026-10-13T05:05:54.317Z] [Client 2] Print-Job successful-ok
+I [2026-10-13T05:05:54.317Z] [Client 2] OK application/ipp 218
+I [2026-10-13T05:05:54.317Z] [Job 1] Starting print job.
+I [2026-10-13T05:05:54.317Z] [Job 1] PNG image dimensions are 76x180x1
+I [2026-10-13T05:05:54.317Z] [Job 1] PNG image resolution is 180x180dpi
+I [2026-10-13T05:05:54.317Z] [Job 1] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:05:54.318Z] [Client 2] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:54.318Z] [Client 2] Continue
+I [2026-10-13T05:05:54.318Z] [Client 2] Get-Job-Attributes successful-ok
+I [2026-10-13T05:05:54.318Z] [Client 2] OK application/ipp 765
+I [2026-10-13T05:05:54.324Z] [Job 1] Completed, job-impressions-completed=3.
+I [2026-10-13T05:05:57.763Z] [Client 3] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:05:57.763Z] [Client 3] HTTP_STATE_POST http://63e88ac90ef5.local:8000/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:57.763Z] [Client 3] Continue
+I [2026-10-13T05:05:57.763Z] [Client 3] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:05:57.764Z] [Client 3] OK application/ipp 14633
+I [2026-10-13T05:05:57.768Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:05:57.768Z] [Client 3] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:05:59.319Z] [Client 2] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:59.319Z] [Client 2] Continue
+I [2026-10-13T05:05:59.319Z] [Client 2] Get-Job-Attributes successful-ok
+I [2026-10-13T05:05:59.319Z] [Client 2] OK application/ipp 795
+I [2026-10-13T05:05:59.321Z] [Client 2] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:05:59.327Z] [Client 4] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:05:59.328Z] [Client 4] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:59.328Z] [Client 4] Continue
+I [2026-10-13T05:05:59.328Z] [Job 2] Received 153 bytes of document data.
+I [2026-10-13T05:05:59.328Z] [Client 4] Print-Job successful-ok
+I [2026-10-13T05:05:59.328Z] [Client 4] OK application/ipp 218
+I [2026-10-13T05:05:59.328Z] [Job 2] Starting print job.
+I [2026-10-13T05:05:59.328Z] [Job 2] PNG image dimensions are 76x180x1
+I [2026-10-13T05:05:59.328Z] [Job 2] PNG image resolution is 180x180dpi
+I [2026-10-13T05:05:59.328Z] [Job 2] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:05:59.329Z] [Client 4] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:05:59.329Z] [Client 4] Continue
+I [2026-10-13T05:05:59.329Z] [Client 4] Get-Job-Attributes successful-ok
+I [2026-10-13T05:05:59.329Z] [Client 4] OK application/ipp 784
+I [2026-10-13T05:05:59.336Z] [Job 2] Completed, job-impressions-completed=3.
+I [2026-10-13T05:06:04.330Z] [Client 4] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:04.330Z] [Client 4] Continue
+I [2026-10-13T05:06:04.330Z] [Client 4] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:04.330Z] [Client 4] OK application/ipp 814
+I [2026-10-13T05:06:04.332Z] [Client 4] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:04.338Z] [Client 5] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:04.338Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:04.339Z] [Client 5] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:04.339Z] [Client 5] Continue
+I [2026-10-13T05:06:04.339Z] [Job 3] Received 153 bytes of document data.
+I [2026-10-13T05:06:04.339Z] [Client 5] Print-Job successful-ok
+I [2026-10-13T05:06:04.339Z] [Client 5] OK application/ipp 218
+I [2026-10-13T05:06:04.339Z] [Job 3] Starting print job.
+I [2026-10-13T05:06:04.340Z] [Job 3] PNG image dimensions are 76x180x1
+I [2026-10-13T05:06:04.340Z] [Job 3] PNG image resolution is 180x180dpi
+I [2026-10-13T05:06:04.340Z] [Job 3] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:06:04.340Z] [Client 5] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:04.340Z] [Client 5] Continue
+I [2026-10-13T05:06:04.340Z] [Client 5] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:04.340Z] [Client 5] OK application/ipp 829
+I [2026-10-13T05:06:04.348Z] [Job 3] Completed, job-impressions-completed=3.
+I [2026-10-13T05:06:09.342Z] [Client 5] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:09.342Z] [Client 5] Continue
+I [2026-10-13T05:06:09.342Z] [Client 5] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:09.342Z] [Client 5] OK application/ipp 859
+I [2026-10-13T05:06:09.343Z] [Client 5] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:09.349Z] [Client 6] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:09.349Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:09.350Z] [Client 6] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:09.350Z] [Client 6] Continue
+I [2026-10-13T05:06:09.350Z] [Job 4] Received 153 bytes of document data.
+I [2026-10-13T05:06:09.350Z] [Client 6] Print-Job successful-ok
+I [2026-10-13T05:06:09.350Z] [Client 6] OK application/ipp 218
+I [2026-10-13T05:06:09.350Z] [Job 4] Starting print job.
+I [2026-10-13T05:06:09.351Z] [Job 4] PNG image dimensions are 76x180x1
+I [2026-10-13T05:06:09.351Z] [Job 4] PNG image resolution is 180x180dpi
+I [2026-10-13T05:06:09.351Z] [Job 4] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:06:09.351Z] [Client 6] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:09.351Z] [Client 6] Continue
+I [2026-10-13T05:06:09.351Z] [Client 6] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:09.351Z] [Client 6] OK application/ipp 784
+I [2026-10-13T05:06:09.359Z] [Job 4] Completed, job-impressions-completed=3.
+I [2026-10-13T05:06:14.353Z] [Client 6] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:14.353Z] [Client 6] Continue
+I [2026-10-13T05:06:14.353Z] [Client 6] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:14.353Z] [Client 6] OK application/ipp 814
+I [2026-10-13T05:06:14.354Z] [Client 6] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:14.360Z] [Client 7] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:14.360Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:14.361Z] [Client 7] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:14.361Z] [Client 7] Continue
+I [2026-10-13T05:06:14.361Z] [Job 5] Received 153 bytes of document data.
+I [2026-10-13T05:06:14.361Z] [Client 7] Print-Job successful-ok
+I [2026-10-13T05:06:14.361Z] [Client 7] OK application/ipp 218
+I [2026-10-13T05:06:14.361Z] [Job 5] Starting print job.
+I [2026-10-13T05:06:14.362Z] [Job 5] PNG image dimensions are 76x180x1
+I [2026-10-13T05:06:14.362Z] [Job 5] PNG image resolution is 180x180dpi
+I [2026-10-13T05:06:14.362Z] [Job 5] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:06:14.362Z] [Client 7] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:14.362Z] [Client 7] Continue
+I [2026-10-13T05:06:14.362Z] [Client 7] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:14.362Z] [Client 7] OK application/ipp 784
+I [2026-10-13T05:06:14.370Z] [Job 5] Completed, job-impressions-completed=3.
+I [2026-10-13T05:06:19.364Z] [Client 7] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.364Z] [Client 7] Continue
+I [2026-10-13T05:06:19.364Z] [Client 7] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:19.364Z] [Client 7] OK application/ipp 814
+I [2026-10-13T05:06:19.366Z] [Client 7] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:19.427Z] [Client 8] Accepted connection from 'localhost'.
+I [2026-10-13T05:06:19.427Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:19.427Z] [Client 8] HTTP_STATE_POST http://localhost:0/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.427Z] [Client 8] Continue
+I [2026-10-13T05:06:19.427Z] [Client 8] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:06:19.428Z] [Client 8] OK application/ipp 10197
+I [2026-10-13T05:06:19.429Z] [Client 8] HTTP_STATE_POST http://localhost:0/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.429Z] [Client 8] Continue
+I [2026-10-13T05:06:19.429Z] [Client 8] Set-Printer-Attributes successful-ok (Printer attributes set.)
+I [2026-10-13T05:06:19.429Z] [Client 8] OK application/ipp 117
+I [2026-10-13T05:06:19.429Z] [Client 8] Closing connection from 'localhost'.
+I [2026-10-13T05:06:19.441Z] [Client 9] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:19.441Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:19.442Z] [Client 9] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.442Z] [Client 9] Continue
+I [2026-10-13T05:06:19.442Z] [Client 9] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:06:19.442Z] [Client 9] OK application/ipp 174
+I [2026-10-13T05:06:19.442Z] [Client 9] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:19.448Z] [Client 10] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:19.449Z] [Client 10] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.449Z] [Client 10] Continue
+I [2026-10-13T05:06:19.449Z] [Job 6] Received 153 bytes of document data.
+I [2026-10-13T05:06:19.449Z] [Client 10] Print-Job successful-ok
+I [2026-10-13T05:06:19.449Z] [Client 10] OK application/ipp 218
+I [2026-10-13T05:06:19.449Z] [Job 6] Starting print job.
+I [2026-10-13T05:06:19.449Z] [Job 6] PNG image dimensions are 76x180x1
+I [2026-10-13T05:06:19.449Z] [Job 6] PNG image resolution is 180x180dpi
+I [2026-10-13T05:06:19.449Z] [Job 6] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:06:19.450Z] [Client 10] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:19.450Z] [Client 10] Continue
+I [2026-10-13T05:06:19.450Z] [Client 10] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:19.450Z] [Client 10] OK application/ipp 765
+I [2026-10-13T05:06:19.458Z] [Job 6] Completed, job-impressions-completed=2.
+I [2026-10-13T05:06:24.451Z] [Client 10] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.451Z] [Client 10] Continue
+I [2026-10-13T05:06:24.451Z] [Client 10] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:24.451Z] [Client 10] OK application/ipp 795
+I [2026-10-13T05:06:24.453Z] [Client 10] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:24.515Z] [Client 11] Accepted connection from 'localhost'.
+I [2026-10-13T05:06:24.515Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:24.515Z] [Client 11] HTTP_STATE_POST http://localhost:0/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.515Z] [Client 11] Continue
+I [2026-10-13T05:06:24.515Z] [Client 11] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:06:24.515Z] [Client 11] OK application/ipp 10207
+I [2026-10-13T05:06:24.517Z] [Client 11] HTTP_STATE_POST http://localhost:0/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.517Z] [Client 11] Continue
+I [2026-10-13T05:06:24.517Z] [Client 11] Set-Printer-Attributes successful-ok (Printer attributes set.)
+I [2026-10-13T05:06:24.517Z] [Client 11] OK application/ipp 117
+I [2026-10-13T05:06:24.517Z] [Client 11] Closing connection from 'localhost'.
+I [2026-10-13T05:06:24.528Z] [Client 12] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:24.528Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:24.529Z] [Client 12] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.529Z] [Client 12] Continue
+I [2026-10-13T05:06:24.529Z] [Client 12] Get-Printer-Attributes successful-ok
+I [2026-10-13T05:06:24.529Z] [Client 12] OK application/ipp 127
+I [2026-10-13T05:06:24.530Z] [Client 12] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:24.535Z] [Client 13] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:24.536Z] [Client 13] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.536Z] [Client 13] Continue
+I [2026-10-13T05:06:24.536Z] [Job 7] Received 153 bytes of document data.
+I [2026-10-13T05:06:24.536Z] [Client 13] Print-Job successful-ok
+I [2026-10-13T05:06:24.536Z] [Client 13] OK application/ipp 218
+I [2026-10-13T05:06:24.536Z] [Job 7] Starting print job.
+I [2026-10-13T05:06:24.537Z] [Job 7] PNG image dimensions are 76x180x1
+I [2026-10-13T05:06:24.537Z] [Job 7] PNG image resolution is 180x180dpi
+I [2026-10-13T05:06:24.537Z] [Job 7] portrait image, 180 px along the tape at 180 dpi -> media length 5000 (1/100 mm), header.cupsHeight=354 PWG_ImageBox=[4 0 79 353]
+I [2026-10-13T05:06:24.537Z] [Client 13] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:24.537Z] [Client 13] Continue
+I [2026-10-13T05:06:24.537Z] [Client 13] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:24.537Z] [Client 13] OK application/ipp 765
+I [2026-10-13T05:06:24.545Z] [Job 7] Completed, job-impressions-completed=2.
+I [2026-10-13T05:06:29.538Z] [Client 13] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:29.539Z] [Client 13] Continue
+I [2026-10-13T05:06:29.539Z] [Client 13] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:29.539Z] [Client 13] OK application/ipp 795
+I [2026-10-13T05:06:29.540Z] [Client 13] Closing connection from '172.17.0.1'.
+I [2026-10-13T05:06:29.546Z] [Client 14] Accepted connection from '172.17.0.1'.
+I [2026-10-13T05:06:29.546Z] Saving system state to '/var/lib/ptouch-app.state'.
+I [2026-10-13T05:06:29.547Z] [Client 14] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:29.547Z] [Client 14] Continue
+I [2026-10-13T05:06:29.547Z] [Job 8] Received 8 bytes of document data.
+I [2026-10-13T05:06:29.547Z] [Client 14] Print-Job successful-ok
+I [2026-10-13T05:06:29.547Z] [Client 14] OK application/ipp 218
+I [2026-10-13T05:06:29.547Z] [Job 8] Starting print job.
+E [2026-10-13T05:06:29.548Z] [Job 8] PNG: Read Error
+libpng error: Read Error
+I [2026-10-13T05:06:29.548Z] [Job 8] Aborted, job-impressions-completed=0.
+I [2026-10-13T05:06:29.548Z] [Client 14] HTTP_STATE_POST http://127.0.0.1:32771/ipp/print/ptouch HTTP/1.1 ()
+I [2026-10-13T05:06:29.548Z] [Client 14] Continue
+I [2026-10-13T05:06:29.548Z] [Client 14] Get-Job-Attributes successful-ok
+I [2026-10-13T05:06:29.548Z] [Client 14] OK application/ipp 788
+I [2026-10-13T05:06:29.550Z] [Client 14] Closing connection from '172.17.0.1'.
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Get-Printer-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        requested-attributes (keyword) = all
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 10412 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        charset-configured (charset) = utf-8
+        charset-supported (1setOf charset) = us-ascii,utf-8
+        client-info-supported (1setOf keyword) = client-name,client-patches,client-string-version,client-version
+        compression-supported (1setOf keyword) = deflate,gzip,none
+        copies-default (integer) = 1
+        device-uuid (uri) = urn:uuid:967729b2-957c-3818-6fab-e58da5179a9c
+        document-format-default (mimeMediaType) = application/octet-stream
+        generated-natural-language-supported (naturalLanguage) = en
+        ipp-versions-supported (1setOf keyword) = 1.1,2.0
+        job-hold-until-default (keyword) = no-hold
+        job-hold-until-supported (1setOf keyword) = day-time,evening,indefinite,night,no-hold,second-shift,third-shift,weekend
+        job-hold-until-time-supported (boolean) = true
+        job-ids-supported (boolean) = true
+        job-k-octets-supported (rangeOfInteger) = 0-101803280
+        job-priority-default (integer) = 50
+        job-priority-supported (integer) = 1
+        job-sheets-default (nameWithoutLanguage) = none
+        job-sheets-supported (nameWithoutLanguage) = none
+        multiple-document-handling-supported (1setOf keyword) = separate-documents-uncollated-copies,separate-documents-collated-copies
+        multiple-document-jobs-supported (boolean) = false
+        multiple-operation-time-out (integer) = 60
+        multiple-operation-time-out-action (keyword) = abort-job
+        natural-language-configured (naturalLanguage) = en
+        notify-events-default (keyword) = job-completed
+        notify-events-supported (1setOf keyword) = document-completed,document-config-changed,document-created,document-fetchable,document-state-changed,document-stopped,job-completed,job-config-changed,job-created,job-fetchable,job-progress,job-state-changed,job-stopped,printer-config-changed,printer-finishings-changed,printer-media-changed,printer-queue-order-changed,printer-restarted,printer-shutdown,printer-state-changed,printer-stopped,resource-canceled,resource-config-changed,resource-created,resource-installed,resource-changed,printer-created,printer-deleted,system-config-changed,system-state-changed,system-stopped
+        notify-lease-duration-default (integer) = 3600
+        notify-lease-duration-supported (rangeOfInteger) = 0-86400
+        notify-max-events-supported (integer) = 100
+        notify-pull-method-supported (keyword) = ippget
+        operations-supported (1setOf enum) = Print-Job,Validate-Job,Create-Job,Send-Document,Cancel-Job,Get-Job-Attributes,Get-Jobs,Get-Printer-Attributes,Pause-Printer,Resume-Printer,Set-Printer-Attributes,Get-Printer-Supported-Values,Create-Printer-Subscriptions,Create-Job-Subscriptions,Get-Subscription-Attributes,Get-Subscriptions,Renew-Subscription,Cancel-Subscription,Get-Notifications,Enable-Printer,Disable-Printer,Pause-Printer-After-Current-Job,Cancel-Current-Job,Cancel-Jobs,Cancel-My-Jobs,Close-Job,Identify-Printer,Hold-Job,Release-Job,Hold-New-Jobs,Release-Held-New-Jobs
+        orientation-requested-supported (1setOf enum) = portrait,landscape,reverse-landscape,reverse-portrait,none
+        pdl-override-supported (keyword) = attempted
+        print-content-optimize-supported (1setOf keyword) = auto,graphic,photo,text-and-graphic,text
+        print-processing-attributes-supported (1setOf keyword) = print-color-mode,printer-resolution
+        print-quality-supported (1setOf enum) = draft,normal,high
+        print-scaling-supported (1setOf keyword) = auto,auto-fit,fill,fit,none
+        printer-get-attributes-supported (keyword) = document-format
+        printer-info (textWithoutLanguage) = ptouch
+        printer-name (nameWithoutLanguage) = ptouch
+        printer-uuid (uri) = urn:uuid:967729b2-957c-3818-6fab-e58da5179a9c
+        requesting-user-uri-supported (boolean) = true
+        smi55357-device-uri (uri) = socket://host.docker.internal:57703
+        smi55357-driver (keyword) = brother_ptouch
+        uri-security-supported (1setOf keyword) = tls,none
+        which-jobs-supported (1setOf keyword) = completed,not-completed,all
+        printer-id (integer) = 1
+        color-supported (boolean) = false
+        document-format-preferred (mimeMediaType) = image/urf
+        document-format-supported (1setOf mimeMediaType) = application/octet-stream,image/pwg-raster,image/urf,image/png,image/jpeg
+        ipp-features-supported (keyword) = ipp-everywhere
+        job-creation-attributes-supported (1setOf keyword) = copies,document-format,document-name,ipp-attribute-fidelity,job-hold-until,job-hold-until-time,job-name,job-priority,job-retain-until,job-retain-until-interval,job-retain-until-time,media,media-col,multiple-document-handling,orientation-requested,print-color-mode,print-content-optimize,print-quality,printer-resolution,finishings,finishings-col
+        jpeg-features-supported (1setOf keyword) = arithmetic,cmyk,progressive
+        jpeg-k-octets-supported (rangeOfInteger) = 0-101803280
+        jpeg-x-dimension-supported (rangeOfInteger) = 0-16384
+        jpeg-y-dimension-supported (rangeOfInteger) = 1-16384
+        landscape-orientation-requested-preferred (enum) = 4
+        media-bottom-margin-supported (integer) = 0
+        media-col-supported (1setOf keyword) = media-bottom-margin,media-left-margin,media-right-margin,media-size,media-size-name,media-top-margin,media-source,media-type
+        media-source-supported (1setOf keyword) = main-roll,auto
+        media-supported (1setOf keyword) = om_6x25mm_6x25mm,om_6x50mm_6x50mm,om_6x100mm_6x100mm,om_9x25mm_9x25mm,om_9x50mm_9x50mm,om_9x100mm_9x100mm,om_12x25mm_12x25mm,om_12x50mm_12x50mm,om_12x100mm_12x100mm,om_18x25mm_18x25mm,om_18x50mm_18x50mm,om_18x100mm_18x100mm,om_24x25mm_24x25mm,om_24x50mm_24x50mm,om_24x100mm_24x100mm,roll_min_6x5mm,roll_max_24x300mm
+        media-top-margin-supported (integer) = 0
+        media-type-supported (keyword) = labels
+        mopria-certified (textWithoutLanguage) = 1.3
+        output-bin-supported (keyword) = face-down
+        pages-per-minute (integer) = 20
+        print-color-mode-supported (1setOf keyword) = bi-level,monochrome
+        printer-device-id (textWithoutLanguage) = MFG:Brother;MDL:PT-2730;CMD:PT-CBP;
+        printer-kind (keyword) = label
+        printer-make-and-model (textWithoutLanguage) = Brother PT-2730
+        printer-output-tray (octetString) = type=unRemovableBin;maxcapacity=-2;remaining=-2;status=0;name=face-down;stackingorder=firstToLast;pagedelivery=faceDown;
+        printer-resolution-supported (resolution) = 180dpi
+        printer-settable-attributes (1setOf keyword) = copies-default,media-col-default,media-col-ready,media-default,media-ready,multiple-document-handling-default,orientation-requested-default,print-color-mode-default,print-content-optimize-default,print-quality-default,printer-contact-col,printer-geo-location,printer-location,printer-organization,printer-organizational-unit,printer-resolution-default,finishings-col-default,finishings-default
+        pwg-raster-document-resolution-supported (resolution) = 180dpi
+        pwg-raster-document-type-supported (1setOf keyword) = black_1,black_8
+        sides-supported (keyword) = one-sided
+        urf-supported (1setOf keyword) = V1.5,W8,DEVW8,PQ3-4-5,FN3-11,IS0-9,MT5,OB10,RS180
+        finishings-supported (1setOf enum) = none,trim,trim-after-pages,trim-after-job
+        finishings-ready (1setOf enum) = none,trim,trim-after-pages,trim-after-job
+        finishings-col-supported (keyword) = finishing-template
+        finishing-template-supported (1setOf keyword) = trim,trim-after-pages,trim-after-job,ptouch-chain
+        finishings-col-database (1setOf collection) = {finishing-template=trim},{finishing-template=trim-after-pages},{finishing-template=trim-after-job},{finishing-template=ptouch-chain}
+        finishings-col-ready (1setOf collection) = {finishing-template=trim},{finishing-template=trim-after-pages},{finishing-template=trim-after-job},{finishing-template=ptouch-chain}
+        media-size-supported (1setOf collection) = {x-dimension=599-601 y-dimension=500-30000},{x-dimension=899-901 y-dimension=500-30000},{x-dimension=1199-1201 y-dimension=500-30000},{x-dimension=1799-1801 y-dimension=500-30000},{x-dimension=2399-2401 y-dimension=500-30000}
+        media-left-margin-supported (1setOf integer) = 53,63,74,83,297
+        media-right-margin-supported (1setOf integer) = 57,71,74,85,297
+        finishings-default (enum) = trim
+        finishings-col-default (collection) = {finishing-template=trim}
+        printer-is-accepting-jobs (boolean) = true
+        printer-state (enum) = idle
+        printer-state-message (textWithoutLanguage) = Idle.
+        printer-state-reasons (keyword) = none
+        copies-supported (rangeOfInteger) = 1-999
+        identify-actions-default (keyword) = none
+        job-spooling-supported (keyword) = spool
+        media-col-default (collection) = {media-bottom-margin=0 media-left-margin=63 media-right-margin=71 media-size={x-dimension=1200 y-dimension=10000} media-size-name=om_12x100mm_12x100mm media-source=main-roll media-top-margin=0 media-type=labels}
+        media-col-ready (collection) = {media-bottom-margin=0 media-left-margin=63 media-right-margin=71 media-size={x-dimension=1200 y-dimension=10000} media-size-name=om_12x100mm_12x100mm media-source=main-roll media-top-margin=0 media-type=labels}
+        media-default (keyword) = om_12x100mm_12x100mm
+        media-ready (keyword) = om_12x100mm_12x100mm
+        multiple-document-handling-default (keyword) = separate-documents-collated-copies
+        orientation-requested-default (enum) = none
+        output-bin-default (keyword) = face-down
+        print-color-mode-default (keyword) = bi-level
+        print-content-optimize-default (keyword) = auto
+        print-quality-default (enum) = normal
+        print-scaling-default (keyword) = none
+        printer-config-change-date-time (dateTime) = 2026-10-13T05:05:54Z
+        printer-config-change-time (integer) = 1
+        printer-contact-col (collection) = {contact-name= contact-uri=data:, contact-vcard=BEGIN:VCARD
+VERSION:4.0
+FN:
+TEL;VALUE=URI;TYPE=work:
+EMAIL;TYPE=work:
+END:VCARD
+}
+        printer-current-time (dateTime) = 2026-10-13T05:05:54Z
+        printer-dns-sd-name (nameWithoutLanguage) = ptouch
+        printer-firmware-name (1setOf nameWithoutLanguage) = ptouch-app,PAPPL,libcups,libjpeg,libpng
+        printer-firmware-patches (1setOf textWithoutLanguage) = ,,,,
+        printer-firmware-string-version (1setOf textWithoutLanguage) = 1.0,1.4.11,2.4.2,8.0,1.6.39
+        printer-firmware-version (1setOf octetString) = \001\000\000\000\000\000\000\000,\001\000\004\000\\000\000\000,\002\000\004\000\002\000\000\000,\010\000\000\000\000\000\000\000,\001\000\006\000'\000\000\000
+        printer-geo-location (unknown) = unknown
+        printer-icons (1setOf uri) = http://127.0.0.1:32771/ptouch/icon-sm.png,http://127.0.0.1:32771/ptouch/icon-md.png,http://127.0.0.1:32771/ptouch/icon-lg.png
+        printer-impressions-completed (integer) = 0
+        printer-input-tray (1setOf octetString) = type=sheetFeedAutoRemovableTray;mediafeed=10000;mediaxfeed=1200;maxcapacity=-2;level=-2;status=0;name=main-roll;,type=other;mediafeed=0;mediaxfeed=0;maxcapacity=-2;level=-2;status=0;name=auto;
+        printer-location (textWithoutLanguage) = 
+        printer-more-info (uri) = http://127.0.0.1:32771/ptouch/
+        printer-organization (textWithoutLanguage) = 
+        printer-organizational-unit (textWithoutLanguage) = 
+        printer-resolution-default (resolution) = 180dpi
+        printer-speed-default (integer) = 0
+        printer-state-change-date-time (dateTime) = 2026-10-13T05:05:54Z
+        printer-state-change-time (integer) = 0
+        printer-supply-info-uri (uri) = http://127.0.0.1:32771/ptouch/supplies
+        printer-up-time (integer) = 0
+        printer-uri-supported (1setOf uri) = ipps://127.0.0.1:32771/ipp/print/ptouch,ipp://127.0.0.1:32771/ipp/print/ptouch
+        printer-xri-supported (1setOf collection) = {xri-authentication=none xri-security=none xri-uri=ipp://127.0.0.1:32771/ipp/print/ptouch},{xri-authentication=none xri-security=tls xri-uri=ipps://127.0.0.1:32771/ipp/print/ptouch}
+        queued-job-count (integer) = 0
+        sides-default (keyword) = one-sided
+        uri-authentication-supported (1setOf keyword) = none,none
+
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 1
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/1
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 1
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 795 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 1
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/1
+        job-uuid (uri) = urn:uuid:7c3a94a6-6050-3147-6578-f51eea77a161
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:05:54Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:05:54Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:05:54Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 3
+        job-printer-up-time (integer) = 5
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 0
+        time-at-completed (integer) = 0
+        time-at-processing (integer) = 0
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+default {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "eject", "autocut": true, "chain_off_at_print": true}], "terminal_commands_after_pages": [], "init": 1, "eject": 1}
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = none
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 2
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/2
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 2
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 814 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = none
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 2
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/2
+        job-uuid (uri) = urn:uuid:7613655c-e38c-3b50-4e73-5c7cb6e8dbfa
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:05:59Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:05:59Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:05:59Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 3
+        job-printer-up-time (integer) = 10
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 5
+        time-at-completed (integer) = 5
+        time-at-processing (integer) = 5
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+none {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": false, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": false, "chain_off_at_print": false}], "terminal_commands_after_pages": [], "init": 1, "eject": 0}
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings-col (collection) = {finishing-template=ptouch-chain}
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 3
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/3
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 3
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 859 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings-col (collection) = {finishing-template=ptouch-chain}
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 3
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/3
+        job-uuid (uri) = urn:uuid:c58fd4b0-5751-3e4a-4c1f-d607cc50e48f
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:04Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:04Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:04Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 3
+        job-printer-up-time (integer) = 15
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 10
+        time-at-completed (integer) = 10
+        time-at-processing (integer) = 10
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+chain {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}], "terminal_commands_after_pages": [], "init": 0, "eject": 0}
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = trim-after-pages
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 4
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/4
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 4
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 814 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = trim-after-pages
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 4
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/4
+        job-uuid (uri) = urn:uuid:358db792-fba1-313b-5e4e-7ae7bf44a420
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:09Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:09Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:09Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 3
+        job-printer-up-time (integer) = 20
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 15
+        time-at-completed (integer) = 15
+        time-at-processing (integer) = 15
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+each {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "eject", "autocut": true, "chain_off_at_print": true}], "terminal_commands_after_pages": [], "init": 0, "eject": 1}
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = trim-after-job
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 5
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/5
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 5
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 814 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 3
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        finishings (enum) = trim-after-job
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 5
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/5
+        job-uuid (uri) = urn:uuid:3f951106-859c-3ad9-7f44-45fbe4b59bb3
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:14Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:14Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:14Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 3
+        job-printer-up-time (integer) = 25
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 20
+        time-at-completed (integer) = 20
+        time-at-processing (integer) = 20
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+end {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": false, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "eject", "autocut": false, "chain_off_at_print": true}], "terminal_commands_after_pages": [], "init": 1, "eject": 1}
+
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Get-Printer-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        requested-attributes (1setOf keyword) = finishings-default,finishings-col-default
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 174 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        finishings-default (enum) = trim-after-job
+        finishings-col-default (collection) = {finishing-template=trim-after-job}
+
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 2
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 6
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/6
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 6
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 795 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 2
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 6
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/6
+        job-uuid (uri) = urn:uuid:e5751cb7-9e44-3b2b-534c-a2775932077f
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:19Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:19Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:19Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 2
+        job-printer-up-time (integer) = 30
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 25
+        time-at-completed (integer) = 25
+        time-at-processing (integer) = 25
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+default 63 {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "eject", "autocut": false, "chain_off_at_print": true}], "terminal_commands_after_pages": [], "init": 1, "eject": 1}
+
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Get-Printer-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        requested-attributes (1setOf keyword) = finishings-default,finishings-col-default
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 127 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        finishings-default (enum) = none
+        finishings-col-default (no-value) = no-value
+
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 2
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 7
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/7
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 7
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [0001]
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 795 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 2
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 7
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/7
+        job-uuid (uri) = urn:uuid:3f8e7022-46a8-3bb3-64ce-c28417491696
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:24Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:24Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:24Z
+        job-impressions (integer) = 1
+        job-impressions-completed (integer) = 2
+        job-printer-up-time (integer) = 35
+        job-state (enum) = completed
+        job-state-message (textWithoutLanguage) = Job completed.
+        job-state-reasons (keyword) = job-completed-successfully
+        time-at-creation (integer) = 30
+        time-at-completed (integer) = 30
+        time-at-processing (integer) = 30
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+default 3 {"pages": [{"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": true, "chain_off_at_print": false}, {"rows": 354, "length_mm": 49.95, "finish": "ff", "autocut": false, "chain_off_at_print": false}], "terminal_commands_after_pages": [], "init": 1, "eject": 0}
+"/tmp/ptouch-smoke-zrfzh4ta/request.test":
+    Print-Job:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        document-format (mimeMediaType) = image/png
+        copies (integer) = 1
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 218 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        job-id (integer) = 8
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/8
+        job-state (enum) = pending
+        job-state-message (textWithoutLanguage) = Job pending.
+        job-state-reasons (keyword) = none
+    Get-Job-Attributes:
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        requesting-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 8
+    /tmp/ptouch-smoke-zrfzh4ta/request                                   [PASS]
+        RECEIVED: 788 bytes in response
+        status-code = successful-ok (successful-ok)
+        attributes-charset (charset) = utf-8
+        attributes-natural-language (naturalLanguage) = en
+        copies (integer) = 1
+        media (keyword) = om_12x50mm_12x50mm
+        print-scaling (keyword) = none
+        document-format-supplied (mimeMediaType) = image/png
+        job-name (nameWithoutLanguage) = Untitled
+        job-originating-user-name (nameWithoutLanguage) = smoke
+        job-id (integer) = 8
+        job-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch/8
+        job-uuid (uri) = urn:uuid:a1bcb206-c7c2-320b-407b-4447e44b5e95
+        job-printer-uri (uri) = ipp://127.0.0.1:32771/ipp/print/ptouch
+        date-time-at-creation (dateTime) = 2026-10-13T05:06:29Z
+        date-time-at-completed (dateTime) = 2026-10-13T05:06:29Z
+        date-time-at-processing (dateTime) = 2026-10-13T05:06:29Z
+        job-impressions (integer) = 0
+        job-impressions-completed (integer) = 0
+        job-printer-up-time (integer) = 35
+        job-state (enum) = aborted
+        job-state-message (textWithoutLanguage) = Job aborted.
+        job-state-reasons (keyword) = document-format-error
+        time-at-creation (integer) = 35
+        time-at-completed (integer) = 35
+        time-at-processing (integer) = 35
+
+Summary: 2 tests, 2 passed, 0 failed, 0 skipped
+Score: 100%
+
+Image smoke passed: four presets, synchronized defaults, geometry, copies, and input failure.

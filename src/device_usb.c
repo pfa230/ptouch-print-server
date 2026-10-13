@@ -19,6 +19,32 @@
 #define PT_USB_TIMEOUT_MS 2000
 #define PT_USB_STATUS_TIMEOUT_MS 300
 
+const pt_dev *pt_usb_supported_model(const char *model)
+{
+    if (!model || !*model) model = "PT-2730";
+    return !strcmp(model, "PT-2730") ? pt_lookup_name(model) : NULL;
+}
+
+bool pt_usb_is_uri(const char *uri)
+{
+    return uri && !strcmp(uri, "ptouch://Brother/PT-2730");
+}
+
+static ssize_t count_matches(libusb_device **devs, ssize_t n,
+                              uint16_t vid, uint16_t pid, libusb_device **match)
+{
+    ssize_t count = 0;
+    for (ssize_t i = 0; i < n; i++) {
+        struct libusb_device_descriptor d;
+        if (libusb_get_device_descriptor(devs[i], &d) == 0 &&
+            d.idVendor == vid && d.idProduct == pid) {
+            count++;
+            if (match) *match = devs[i];
+        }
+    }
+    return count;
+}
+
 typedef struct {
     libusb_context       *ctx;   /* per-connection context, exited on close */
     libusb_device_handle *h;
@@ -33,7 +59,6 @@ typedef struct {
 static bool pt_usb_list(pappl_device_cb_t cb, void *data,
                         pappl_deverror_cb_t err_cb, void *err_data)
 {
-    (void)err_cb; (void)err_data;
     libusb_context *ctx = NULL;
     if (libusb_init(&ctx) != 0)
         return false;
@@ -44,21 +69,26 @@ static bool pt_usb_list(pappl_device_cb_t cb, void *data,
         return false;
     }
 
-    bool stop = false;
-    for (ssize_t i = 0; i < n && !stop; i++) {
+    for (ssize_t i = 0; i < n; i++) {
         struct libusb_device_descriptor d;
         if (libusb_get_device_descriptor(devs[i], &d) != 0 || d.idVendor != PT_VID)
             continue;
         const pt_dev *dev = pt_lookup_dev(d.idVendor, d.idProduct);
-        if (!dev)
+        if (!dev || pt_usb_supported_model(dev->name))
             continue;
-
-        char uri[256], id[256], info[128];
-        snprintf(uri, sizeof uri, "ptouch://Brother/%s", dev->name);
-        snprintf(id, sizeof id, "MFG:Brother;MDL:%s;CMD:PT-CBP;", dev->name);
-        snprintf(info, sizeof info, "%s (USB)", dev->name);
-        stop = cb(info, uri, id, data);  /* cb returns true to stop early */
+        char message[160];
+        snprintf(message, sizeof message, "%s (%04x:%04x) is recognized but not print-supported",
+                 dev->name, d.idVendor, d.idProduct);
+        if (err_cb) err_cb(message, err_data);
     }
+    const pt_dev *supported = pt_usb_supported_model(NULL);
+    ssize_t count = count_matches(devs, n, supported->vid, supported->pid, NULL);
+    bool stop = false;
+    if (count == 1)
+        stop = cb("PT-2730 (USB)", "ptouch://Brother/PT-2730",
+                  "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", data);
+    else if (count > 1 && err_cb)
+        err_cb("Multiple PT-2730 devices match; USB selection is ambiguous", err_data);
     libusb_free_device_list(devs, 1);
     libusb_exit(ctx);
     return stop;
@@ -67,8 +97,10 @@ static bool pt_usb_list(pappl_device_cb_t cb, void *data,
 static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const char *name)
 {
     (void)name;
-    const char *slash = strrchr(device_uri, '/');
-    const char *model = slash ? slash + 1 : device_uri;
+    if (!pt_usb_is_uri(device_uri)) {
+        papplDeviceError(device, "Unsupported P-touch device URI: %s", device_uri);
+        return false;
+    }
 
     libusb_context *ctx = NULL;
     if (libusb_init(&ctx) != 0)
@@ -80,17 +112,19 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
         return false;
     }
 
+    const pt_dev *supported = pt_usb_supported_model(NULL);
+    libusb_device *match = NULL;
+    ssize_t count = count_matches(devs, n, supported->vid, supported->pid, &match);
+    if (count != 1) {
+        papplDeviceError(device, count > 1 ? "Multiple PT-2730 devices match; USB selection is ambiguous"
+                                        : "PT-2730 is not attached");
+        libusb_free_device_list(devs, 1);
+        libusb_exit(ctx);
+        return false;
+    }
     libusb_device_handle *h = NULL;
     int detached = 0;
-    for (ssize_t i = 0; i < n; i++) {
-        struct libusb_device_descriptor d;
-        if (libusb_get_device_descriptor(devs[i], &d) != 0 || d.idVendor != PT_VID)
-            continue;
-        const pt_dev *dev = pt_lookup_dev(d.idVendor, d.idProduct);
-        if (!dev || (model[0] && strcmp(dev->name, model) != 0))
-            continue;
-
-        if (libusb_open(devs[i], &h) != 0) { h = NULL; continue; }
+    if (libusb_open(match, &h) == 0) {
         if (libusb_kernel_driver_active(h, 0) == 1 &&
             libusb_detach_kernel_driver(h, 0) == 0)
             detached = 1;
@@ -98,9 +132,7 @@ static bool pt_usb_open(pappl_device_t *device, const char *device_uri, const ch
             if (detached) libusb_attach_kernel_driver(h, 0);
             libusb_close(h);
             h = NULL; detached = 0;
-            continue;
         }
-        break;  /* success */
     }
     libusb_free_device_list(devs, 1);
     if (!h) {
@@ -151,8 +183,11 @@ static ssize_t pt_usb_read(pappl_device_t *device, void *buffer, size_t bytes)
     return -1;
 }
 
-ssize_t pt_usb_read_status(pappl_device_t *device, void *buffer, size_t bytes)
+ssize_t pt_usb_read_status(pappl_device_t *device, const char *device_uri,
+                           void *buffer, size_t bytes)
 {
+    if (!device || !pt_usb_is_uri(device_uri))
+        return -1;
     pt_usb_conn *c = papplDeviceGetData(device);
     if (!c)
         return -1;
@@ -195,35 +230,32 @@ static pappl_preason_t pt_usb_status(pappl_device_t *device)
 static char *pt_usb_id(pappl_device_t *device, char *buffer, size_t bufsize)
 {
     (void)device;
-    strncpy(buffer, "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;", bufsize - 1);
-    buffer[bufsize - 1] = '\0';
+    if (bufsize) snprintf(buffer, bufsize, "MFG:Brother;MDL:PT-2730;CMD:PT-CBP;");
     return buffer;
 }
 
-bool pt_usb_present(uint16_t vid, uint16_t pid)
+ssize_t pt_usb_count(uint16_t vid, uint16_t pid)
 {
     libusb_context *ctx = NULL;
     if (libusb_init(&ctx) != 0)
-        return false;
+        return -1;
 
     libusb_device **devs;
     ssize_t n = libusb_get_device_list(ctx, &devs);
     if (n < 0) {
         libusb_exit(ctx);
-        return false;
+        return -1;
     }
 
-    bool found = false;
-    for (ssize_t i = 0; i < n && !found; i++) {
-        struct libusb_device_descriptor d;
-        if (libusb_get_device_descriptor(devs[i], &d) != 0)
-            continue;
-        if (d.idVendor == vid && d.idProduct == pid)
-            found = true;  /* cached descriptor compare; no device I/O */
-    }
+    ssize_t count = count_matches(devs, n, vid, pid, NULL);
     libusb_free_device_list(devs, 1);
     libusb_exit(ctx);
-    return found;
+    return count;
+}
+
+bool pt_usb_present(uint16_t vid, uint16_t pid)
+{
+    return pt_usb_count(vid, pid) == 1;
 }
 
 void pt_usb_register(void)

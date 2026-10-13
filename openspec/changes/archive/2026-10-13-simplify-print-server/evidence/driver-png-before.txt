@@ -1,0 +1,19 @@
+Internal ctest changing into directory: /results/build
+Test project /results/build
+    Start 1: driver_finishings
+    Start 4: png_geometry
+1/2 Test #4: png_geometry .....................Subprocess aborted***Exception:   0.22 sec
+PNG media7: got 180 raster rows, expected 354
+test_png_geometry: /src/tests/test_png_geometry.c:190: run_image: Assertion `actual_rows == expected_rows' failed.
+
+2/2 Test #1: driver_finishings ................Subprocess aborted***Exception:  11.21 sec
+test_driver: /src/tests/test_driver.c:781: main: Assertion `busy_poll_checked && papplJobGetState(busy_job) == IPP_JSTATE_COMPLETED' failed.
+
+
+0% tests passed, 2 tests failed out of 2
+
+Total Test time (real) =  11.21 sec
+
+The following tests FAILED:
+	  1 - driver_finishings (Subprocess aborted)
+	  4 - png_geometry (Subprocess aborted)

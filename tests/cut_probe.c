@@ -1,10 +1,12 @@
 /* Test-only PT-2730 finalization probe. Never used by the production app. */
+#define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "cutter.h"
 #include "protocol.h"
 #include "raster.h"
@@ -19,15 +21,18 @@ typedef struct {
     size_t bytes;
 #ifdef PT_PROBE_TRANSPORT
     pappl_device_t *device;
+    const char *device_uri;
 #endif
 } output;
 
 static void usage(const char *name)
 {
     fprintf(stderr,
-            "Usage: %s --capture FILE --sequence baseline|drain|tail-eject|tail-chain-off "
-            "--labels 1|3 --mode each|end --precut 0|1 --tape-mm N "
+            "Usage: %s --capture FILE --sequence batch|baseline|drain|tail-eject|tail-chain-off "
+            "--labels 1|2|3 --mode chain|each|none|end --precut 0|1 --tape-mm N "
             "[--device ptouch://Brother/PT-2730|socket://HOST:PORT]\n"
+            "Batch requires --precut 1; --continue 1 omits reset for a known healthy open run.\n"
+            "Batch also accepts --batches chain:3,chain:2,each:1 instead of --labels/--mode.\n"
             "Add --wait-ready 1 to read USB completion status between pages.\n"
             "Omitting --device only writes a capture; it never contacts a printer.\n"
             "Use --status-only to query the PT-2730 without initialization or printing.\n",
@@ -52,6 +57,15 @@ static void report_error(const char *message, void *data)
 }
 #endif
 
+#ifdef PT_PROBE_TRANSPORT
+static int64_t milliseconds(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now)) return -1;
+    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+#endif
+
 /* Diagnostic only: do not send another page while the printer is busy.
  * Read unsolicited packets, never issue a status request during printing. */
 static bool read_ready(output *out, bool wait, int page_index)
@@ -60,8 +74,12 @@ static bool read_ready(output *out, bool wait, int page_index)
     if (!out->device) return true;
     uint8_t packet[32];
     size_t used = 0;
-    for (int attempt = 0; attempt < 70; attempt++) {
-        ssize_t n = pt_usb_read_status(out->device, packet + used, sizeof packet - used);
+    int64_t started = milliseconds();
+    if (started < 0) return false;
+    /* Leave room for the final bounded 300 ms read within twenty seconds. */
+    while (milliseconds() >= started && milliseconds() - started < 19700) {
+        ssize_t n = pt_usb_read_status(out->device, out->device_uri,
+                                       packet + used, sizeof packet - used);
         if (n < 0) {
             fprintf(stderr, "probe: status read failed after page %d\n", page_index + 1);
             return false;
@@ -135,49 +153,92 @@ static bool page(output *out, int index, int width)
     return true;
 }
 
+typedef struct { pt_cut_mode mode; int labels; } batch;
+
+static int parse_mode(const char *value)
+{
+    if (!strcmp(value, "chain")) return PT_CUT_CHAIN;
+    if (!strcmp(value, "each")) return PT_CUT_EACH;
+    if (!strcmp(value, "none")) return PT_CUT_NONE;
+    if (!strcmp(value, "end")) return PT_CUT_END;
+    return -1;
+}
+
+/* At most three batches and six labels: enough for both continuation gates. */
+static int parse_batches(const char *value, batch *batches)
+{
+    const char *p = value;
+    int count = 0, total = 0;
+    while (*p && count < 3) {
+        const char *colon = strchr(p, ':');
+        char mode[6];
+        if (!colon || colon == p || colon - p >= (int)sizeof mode) return -1;
+        memcpy(mode, p, (size_t)(colon - p));
+        mode[colon - p] = 0;
+        int parsed = parse_mode(mode);
+        if (parsed < 0 || colon[1] < '1' || colon[1] > '3' ||
+            (colon[2] && colon[2] != ',')) return -1;
+        batches[count++] = (batch){parsed, colon[1] - '0'};
+        total += colon[1] - '0';
+        if (!colon[2]) return total <= 6 ? count : -1;
+        p = colon + 3;
+    }
+    return -1;
+}
+
+/* Model the proposed callbacks: rendpage leaves one pending print command;
+ * the next valid label releases it with FF, successful rendjob selects FF or
+ * late chain-off/EJECT. No operation array or count-dependent page setup. */
+static bool run_batch(output *out, int labels, int tape, pt_cut_mode mode,
+                      bool continuing, bool wait_ready)
+{
+    uint8_t bytes[8];
+    bool pending = false;
+    pt_cut_policy policy = pt_cut_policy_for(mode);
+    if ((!continuing && !emit(out, bytes, pt_cmd_init(bytes))) ||
+        !emit(out, bytes, pt_cmd_rasterstart(bytes, FLAG_NONE))) return false;
+    for (int i = 0; i < labels; i++) {
+        if (pending && (!emit(out, bytes, pt_cmd_ff(bytes)) ||
+                        (wait_ready && !read_ready(out, true, i - 1)))) return false;
+        pending = false;
+        if (!emit(out, bytes, pt_cmd_printinfo(bytes, (uint8_t)tape)) ||
+            !emit(out, bytes, pt_cmd_setmode(bytes, pt_cut_autocut(policy, i == 0) ? 0x40 : 0)) ||
+            !emit(out, bytes, pt_cmd_setadvanced(bytes, 0)) ||
+            !page(out, i, pt_tape_px(tape))) return false;
+        pending = true;
+    }
+    if (pending) {
+        if (policy.cut_at_end && !emit(out, bytes, pt_cmd_setadvanced(bytes, 8))) return false;
+        if (!emit(out, bytes, policy.cut_at_end ? pt_cmd_eject(bytes) : pt_cmd_ff(bytes)) ||
+            (wait_ready && !read_ready(out, true, labels - 1))) return false;
+    }
+    return true;
+}
+
+/* Preserve the historical diagnostic bytes, including optional precut and
+ * the empty drain EJECT. These commands are test-local, not production policy. */
 static bool run(output *out, int labels, int tape, pt_cut_mode mode, int precut, int sequence,
                 bool wait_ready)
 {
-    pt_op ops[15];
-    int count = pt_plan_batch(labels, (uint8_t)tape, mode, precut,
-                              sequence == 1 || sequence == 2, ops, 15);
     uint8_t bytes[8];
-    if (wait_ready && !read_ready(out, false, -1)) return false;
-    if (count < 0 || !emit(out, bytes, pt_cmd_init(bytes)) ||
-        !emit(out, bytes, pt_cmd_rasterstart(bytes, FLAG_NONE)))
-        return false;
+    if ((wait_ready && !read_ready(out, false, -1)) ||
+        !emit(out, bytes, pt_cmd_init(bytes)) ||
+        !emit(out, bytes, pt_cmd_rasterstart(bytes, FLAG_NONE))) return false;
 
-    for (int i = 0; i < count; i++) {
-        size_t n;
-        switch (ops[i].kind) {
-            case PT_OP_PRINTINFO: n = pt_cmd_printinfo(bytes, ops[i].arg); break;
-            case PT_OP_SETMODE: n = pt_cmd_setmode(bytes, ops[i].arg); break;
-            case PT_OP_SETADVANCED:
-                n = pt_cmd_setadvanced(bytes, sequence == 3 && ops[i].page_index == labels - 1
-                                             ? 0 : ops[i].arg);
-                break;
-            case PT_OP_FF:
-                /* Isolate the failed probe's empty second print command:
-                 * choose the last page's terminator after its raster, once. */
-                n = sequence == 2 && i == count - 1 ? pt_cmd_eject(bytes) : pt_cmd_ff(bytes);
-                break;
-            case PT_OP_EJECT:
-                if (sequence == 3 && !emit(out, bytes, pt_cmd_setadvanced(bytes, 8)))
-                    return false;
-                n = pt_cmd_eject(bytes);
-                break;
-            case PT_OP_PRINT_PAGE:
-                if (!page(out, ops[i].page_index, pt_tape_px(tape)))
-                    return false;
-                continue;
-            default: return false;
-        }
-        if (!emit(out, bytes, n))
-            return false;
-        if (wait_ready && (ops[i].kind == PT_OP_FF || ops[i].kind == PT_OP_EJECT) &&
-            !read_ready(out, true, ops[i].page_index)) return false;
+    for (int i = 0; i < labels; i++) {
+        bool autocut = precut || (mode == PT_CUT_EACH && i > 0);
+        bool terminal = i == labels - 1 && sequence != 1 && sequence != 2;
+        if ((autocut && !emit(out, bytes, pt_cmd_printinfo(bytes, (uint8_t)tape))) ||
+            !emit(out, bytes, pt_cmd_setmode(bytes, autocut ? 0x40 : 0)) ||
+            !emit(out, bytes, pt_cmd_setadvanced(bytes, terminal && sequence != 3 ? 8 : 0)) ||
+            !page(out, i, pt_tape_px(tape))) return false;
+        if (terminal && sequence == 3 &&
+            !emit(out, bytes, pt_cmd_setadvanced(bytes, 8))) return false;
+        /* tail-eject replaces the final FF instead of appending an empty EJECT. */
+        bool eject = terminal || (sequence == 2 && i == labels - 1);
+        if (!emit(out, bytes, eject ? pt_cmd_eject(bytes) : pt_cmd_ff(bytes)) ||
+            (wait_ready && !read_ready(out, true, i))) return false;
     }
-    /* No sleep, reset, extra raster, or device close between final FF and EJECT. */
     return sequence != 1 || emit(out, bytes, pt_cmd_eject(bytes));
 }
 
@@ -191,10 +252,12 @@ static int status_only(void)
     if (!out.capture)
         return 1;
     out.device = papplDeviceOpen("ptouch://Brother/PT-2730", "cut-probe-status", report_error, NULL);
+    out.device_uri = "ptouch://Brother/PT-2730";
     bool ok = out.device && emit(&out, command, pt_cmd_status_request(command));
     size_t received = 0;
     for (int i = 0; ok && i < 20 && received < sizeof response; i++) {
-        ssize_t n = pt_usb_read_status(out.device, response + received, sizeof response - received);
+        ssize_t n = pt_usb_read_status(out.device, out.device_uri,
+                                       response + received, sizeof response - received);
         if (n < 0) ok = false;
         else received += (size_t)n;
     }
@@ -223,8 +286,9 @@ int main(int argc, char **argv)
 #endif
     }
     const char *capture = NULL, *uri = NULL;
-    int labels = -1, tape = -1, precut = -1, wait_ready = 0;
-    pt_cut_mode mode = PT_CUT_NONE;
+    int labels = -1, tape = -1, precut = -1, wait_ready = 0, continuing = 0;
+    int mode = -1;
+    const char *batch_list = NULL;
     int drain = -1;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--help")) {
@@ -242,21 +306,33 @@ int main(int argc, char **argv)
         else if (!strcmp(key, "--tape-mm")) tape = number(value);
         else if (!strcmp(key, "--precut")) precut = number(value);
         else if (!strcmp(key, "--wait-ready")) wait_ready = number(value);
+        else if (!strcmp(key, "--continue")) continuing = number(value);
+        else if (!strcmp(key, "--batches")) batch_list = value;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "baseline")) drain = 0;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "drain")) drain = 1;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "tail-eject")) drain = 2;
         else if (!strcmp(key, "--sequence") && !strcmp(value, "tail-chain-off")) drain = 3;
-        else if (!strcmp(key, "--mode") && !strcmp(value, "each")) mode = PT_CUT_EACH;
-        else if (!strcmp(key, "--mode") && !strcmp(value, "end")) mode = PT_CUT_END;
+        else if (!strcmp(key, "--sequence") && !strcmp(value, "batch")) drain = 4;
+        else if (!strcmp(key, "--mode")) mode = parse_mode(value);
         else {
             usage(argv[0]);
             return 2;
         }
     }
-    if (!capture || (labels != 1 && labels != 3) || pt_tape_px(tape) <= 0 ||
+    batch batches[3];
+    int batch_count = batch_list ? parse_batches(batch_list, batches) : 1;
+    if (!batch_list) batches[0] = (batch){mode, labels};
+    if (!capture || pt_tape_px(tape) <= 0 ||
         (precut != 0 && precut != 1) || (wait_ready != 0 && wait_ready != 1) ||
+        (continuing != 0 && continuing != 1) ||
         (wait_ready && uri && strcmp(uri, "ptouch://Brother/PT-2730")) ||
-        drain < 0 || mode == PT_CUT_NONE ||
+        drain < 0 || batch_count < 1 ||
+        (batch_list && (drain != 4 || labels != -1 || mode != -1)) ||
+        (!batch_list && (mode < 0 || labels < 1 || labels > 3)) ||
+        (drain == 4 && precut != 1) ||
+        (drain != 4 && (batch_list || continuing ||
+                       (mode != PT_CUT_EACH && mode != PT_CUT_END) || labels == 2)) ||
+        (drain == 4 && uri && !strcmp(uri, "ptouch://Brother/PT-2730") && !wait_ready) ||
         (uri && strcmp(uri, "ptouch://Brother/PT-2730") && strncmp(uri, "socket://", 9))) {
         usage(argv[0]);
         return 2;
@@ -274,6 +350,7 @@ int main(int argc, char **argv)
     }
 #ifdef PT_PROBE_TRANSPORT
     if (uri) {
+        out.device_uri = uri;
         pt_usb_register();
         out.device = papplDeviceOpen(uri, "cut-probe", report_error, NULL);
         if (!out.device) {
@@ -283,7 +360,19 @@ int main(int argc, char **argv)
         }
     }
 #endif
-    bool ok = run(&out, labels, tape, mode, precut, drain, wait_ready);
+    bool ok;
+    if (drain == 4) {
+        ok = !wait_ready || read_ready(&out, false, -1);
+        for (int i = 0; ok && i < batch_count; i++) {
+            fprintf(stderr, "probe: batch=%d labels=%d continuing=%d\n",
+                    i + 1, batches[i].labels, continuing);
+            ok = run_batch(&out, batches[i].labels, tape, batches[i].mode,
+                           continuing, wait_ready);
+            continuing = !pt_cut_policy_for(batches[i].mode).cut_at_end;
+        }
+    } else {
+        ok = run(&out, labels, tape, (pt_cut_mode)mode, precut, drain, wait_ready);
+    }
 #ifdef PT_PROBE_TRANSPORT
     if (out.device)
         papplDeviceClose(out.device);

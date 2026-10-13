@@ -1,0 +1,6 @@
+patching file pappl/job-process.c
+Reversed (or previously applied) patch detected!  Skipping patch.
+9 out of 9 hunks ignored -- saving rejects to file pappl/job-process.c.rej
+patching file pappl/job-filter.c
+Reversed (or previously applied) patch detected!  Skipping patch.
+3 out of 3 hunks ignored -- saving rejects to file pappl/job-filter.c.rej

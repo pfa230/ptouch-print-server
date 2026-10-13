@@ -2,16 +2,25 @@
 # ---- build stage: PAPPL + ptouch-app ----
 FROM debian:bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake pkg-config git ca-certificates \
+      build-essential cmake pkg-config git ca-certificates python3 \
       libusb-1.0-0-dev libpng-dev libjpeg-dev zlib1g-dev \
-      libcups2-dev libcupsimage2-dev libssl-dev libavahi-client-dev \
+      libcups2-dev libcupsimage2-dev libssl-dev libavahi-client-dev libgnutls28-dev libkrb5-dev \
  && rm -rf /var/lib/apt/lists/*
+# Retain Debian security fixes while correcting only raster EOF reporting.
+COPY patches/cups-2.4.2-deb12u9-raster.patch /tmp/cups-raster.patch
+COPY scripts/build-cups.sh /tmp/build-cups.sh
+RUN /tmp/build-cups.sh /tmp/cups-raster.patch
+COPY patches/pappl-1.4.11-raster.patch /tmp/pappl-raster.patch
+COPY patches/pappl-1.4.11-finishings.patch /tmp/pappl-finishings.patch
 RUN git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl /tmp/pappl \
- && cd /tmp/pappl && ./configure && make && make install && ldconfig \
+ && cd /tmp/pappl && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-raster.patch \
+ && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-finishings.patch \
+ && ./configure && make && make install && ldconfig \
  && rm -rf /tmp/pappl
 WORKDIR /src
 COPY . .
-RUN cmake -S . -B build-app && cmake --build build-app --target ptouch-app \
+RUN cmake -S . -B build-app -DPTOUCH_CORE_ONLY=OFF && cmake --build build-app \
+ && ctest --test-dir build-app --output-on-failure \
  && install -Dm755 build-app/ptouch-app /out/usr/local/bin/ptouch-app
 
 # ---- runtime stage: slim ----
@@ -21,7 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libpng16-16 libjpeg62-turbo zlib1g libssl3 \
       avahi-daemon dbus ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-# PAPPL shared libs (SONAME chain) + the app
+# Patched ABI-compatible CUPS and PAPPL libraries (including SONAME links).
+COPY --from=build /usr/local/lib/libcups.so* /usr/local/lib/
+COPY --from=build /usr/local/lib/libcupsimage.so* /usr/local/lib/
+COPY --from=build /usr/local/share/ptouch/cups-source-version /usr/local/share/ptouch/cups-source-version
+# Fail rather than replace a newer runtime security revision with cached libraries.
+RUN test "$(dpkg-query -W -f='${source:Version}' libcups2)" = "$(cat /usr/local/share/ptouch/cups-source-version)"
+# PAPPL shared libs + the app
 COPY --from=build /usr/local/lib/libpappl.so* /usr/local/lib/
 COPY --from=build /out/usr/local/bin/ptouch-app /usr/local/bin/ptouch-app
 RUN ldconfig

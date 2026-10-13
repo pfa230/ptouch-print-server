@@ -1,0 +1,6 @@
+patching file pappl/printer-driver.c
+patching file pappl/printer-ipp.c
+patching file pappl/job-process.c
+patching file pappl/finishings-private.h
+patching file pappl/system-loadsave.c
+patching file pappl/printer-webif.c
