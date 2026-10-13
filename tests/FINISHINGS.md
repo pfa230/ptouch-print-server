@@ -57,7 +57,7 @@ tape: chain:2 then each:2, and none:2 then end:2, with an observation/idle gap a
 each batch boundary. The operator confirmed initial leaders cut off, expected
 internal/final cuts, held ends released by the following batch, and no discarded
 inter-batch leaders. See CUT-PROBE.md for exact commands and the change's
-validation.md for status packets, captures, and operator observations.
+validation.md for the acceptance summary.
 
 The separately authorized integrated acceptance also passed all 21 labels on
 12 mm tape, including PNG/raster batches, cassette change, offline continuation,

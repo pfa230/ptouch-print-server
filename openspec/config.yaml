@@ -1,7 +1,8 @@
 schema: spec-driven
 
 context: |
-  Read README.md and docs/adr/README.md for current behavior and design decisions;
+  Read README.md and openspec/specs/server-architecture/spec.md for current behavior
+  and architectural constraints;
   spikes/FINDINGS.md is historical and some conclusions have been superseded.
   Only the Brother PT-2730 is hardware-certified. Other recognized USB models
   must not be described as print-supported without protocol work and validation.

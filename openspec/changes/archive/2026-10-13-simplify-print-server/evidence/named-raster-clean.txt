@@ -1,2 +1,0 @@
-patching file pappl/job-process.c
-patching file pappl/job-filter.c

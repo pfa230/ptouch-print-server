@@ -309,20 +309,21 @@ The PT-2730 USB interface can be held by only one process. A dev/spike container
 holding the device must be stopped before this container starts; both cannot own
 the device at once.
 
-## Design decisions
+## Specifications
 
-The reasoning behind the architecture, including several corrections, is recorded
-as ADRs in [`docs/adr/`](docs/adr/README.md) - why this is its own PAPPL
-application, why the USB scheme is custom, why media is advertised at nominal tape
-width, why the app owns the PNG filter, how offline and job chaining work, and why
-the licence is GPL-3.0.
+The canonical [server architecture](openspec/specs/server-architecture/spec.md)
+specification defines the PAPPL application, core/adapter boundary, USB access,
+physical media, PNG route, batch lifecycle, deployment, and licensing decisions.
+Detailed contracts live in [label rendering](openspec/specs/label-rendering/spec.md),
+[batch printing](openspec/specs/batch-printing/spec.md), and
+[printer devices](openspec/specs/printer-device/spec.md).
 
 ## OpenSpec workflow
 
 [OpenSpec](https://openspec.dev/docs/setup) tracks proposed changes in
 `openspec/changes/` and accepted specifications in `openspec/specs/`. Project
-constraints live in `openspec/config.yaml`; the existing ADRs remain the record
-of design decisions.
+constraints live in `openspec/config.yaml`; accepted specifications are the
+canonical record of the server's contracts and architecture.
 
 The repository includes six Codex skills in `.agents/skills/`. Start a new Codex
 session after setup to load them:

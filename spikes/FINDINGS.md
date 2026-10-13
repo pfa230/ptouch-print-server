@@ -1,10 +1,9 @@
 # M0 Spike Findings
 
 > **Historical spike log.** This records what was learned during the M0/M2 probes and retains technical findings.
-> Some conclusions here were later superseded by the shipped implementation - notably that chained
-> multi-label printing was "not achievable", which cross-job chaining (ADR-0008) solved, and the
-> open question about the production USB mapping, answered in ADR-0009. For current behaviour and
-> the reasoning behind it, see [`docs/adr/`](../docs/adr/README.md).
+> Some conclusions were superseded by the shipped implementation, including chained multi-label
+> printing and production USB hotplug. Current behavior and architectural constraints are in the
+> [server specification](../openspec/specs/server-architecture/spec.md).
 
 Running log; each probe appends. Host: a Linux container host, PT-2730 `04f9:2041` on
 `/dev/bus/usb/<bus>/<dev>`. Spike image: `ptouch-spike` (Debian bookworm + PAPPL 1.4.11).

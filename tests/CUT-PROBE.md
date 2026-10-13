@@ -173,8 +173,8 @@ The user confirmed these physical results for the approved initial gate:
 All eight labels received clean completion and receiving-ready notifications.
 Captures contain the expected FF/EJECT commands and no initialization between
 healthy continued batches. The deployed server image was not replaced, and the
-original server was restored afterward. Evidence lives in
-`vault:/tmp/ptouch-eight-label-gate.MDnnuO/` and the OpenSpec change's validation.md.
+original server was restored afterward. The acceptance summary is in the
+OpenSpec change's validation.md.
 The separately authorized 21-label integrated acceptance subsequently passed
 on 12 mm tape, including PNG/raster batches and recovery. See
 HARDWARE-ACCEPTANCE.md and the change's validation.md. Software-only geometry
