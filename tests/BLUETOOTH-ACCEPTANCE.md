@@ -17,8 +17,8 @@ ADDR=XX:XX:XX:XX:XX:XX                       # the printer's Bluetooth address
 U=ipp://<pi-hostname>.local:8000/ipp/print/ptouch
 G=tests/bluetooth-gate
 python3 -I $G/make-fixture.py label.png
-enum() { ipptool -t -d finishings=$1 -d copies=$2 -f label.png "$U" $G/print-enum.test; }
-chain() { ipptool -t -d copies=$1 -f label.png "$U" $G/print-chain.test; }
+enum() { ipptool -t -d finishings=$1 -d copies=$2 -f label.png "$U" $G/print-enum.ipp; }
+chain() { ipptool -t -d copies=$1 -f label.png "$U" $G/print-chain.ipp; }
 ```
 
 On the Pi, in a second terminal, log the link once a second for the whole gate:
