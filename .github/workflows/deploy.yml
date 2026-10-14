@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build and test runtime image
         uses: docker/build-push-action@v6
@@ -20,6 +21,12 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ptouch-deploy:check
+      - name: Build and test arm64 runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.deploy
+          platforms: linux/arm64
       - name: Smoke - IPP jobs and isolated socket capture
         run: |
           set -e
@@ -48,7 +55,7 @@ jobs:
         with:
           context: .
           file: Dockerfile.deploy
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

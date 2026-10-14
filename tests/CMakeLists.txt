@@ -17,6 +17,10 @@ add_executable(test_status test_status.c)
 target_link_libraries(test_status ptcore)
 add_test(NAME status COMMAND test_status)
 
+add_executable(test_config test_config.c)
+target_link_libraries(test_config ptcore)
+add_test(NAME config COMMAND test_config)
+
 add_executable(test_cutter test_cutter.c)
 target_link_libraries(test_cutter ptcore)
 add_test(NAME cutter COMMAND test_cutter)

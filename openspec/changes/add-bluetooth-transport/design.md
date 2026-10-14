@@ -36,12 +36,12 @@ See [proposal.md](proposal.md) for motivation and the capability deltas for the 
 
 ### Bluetooth is a second PAPPL device scheme
 
-Add `src/device_bt.c` registering a `ptouch-bt://` scheme (`ptouch-bt://Brother/PT-P710BT/<address>`) with open, close, read, write and status callbacks over an `AF_BLUETOOTH`/`BTPROTO_RFCOMM` socket on channel 1. The scheme keeps PAPPL's lifetime: the connection opens when a job starts with no device open, stays open across queued jobs, and closes when the queue goes idle; an idle status read opens and closes its own connection. No extra connection state is added.
+Add `src/device_bt.c` registering a `ptouch-bt://` scheme (`ptouch-bt://Brother/PT-P710BT/<address>`) with open, close and write callbacks and a bounded status read over an `AF_BLUETOOTH`/`BTPROTO_RFCOMM` socket on channel 1. The scheme keeps PAPPL's lifetime: the connection opens when a job starts with no device open, stays open across queued jobs, and closes when the queue goes idle; an idle status read opens and closes its own connection. No extra connection state is added.
 
 The scheme's callbacks keep the USB return conventions so the driver needs no transport-specific handling:
 
 - **Connect** is non-blocking with a 10-second deadline, then the socket returns to blocking mode. Ten seconds covers Bluetooth paging (about 5 seconds) plus RFCOMM setup, and replaces the kernel's 30-second default so an absent printer cannot stall a status read for half a minute.
-- **Status read** receives with `MSG_WAITALL` and a 300 ms receive timeout, the same budget as the USB status read. It returns the requested bytes once they all arrive, the partial count at timeout, 0 if nothing arrived, and -1 on EOF or error. A reply split across RFCOMM frames is therefore assembled inside one read call, and the driver's existing ten-call accumulation loop (`src/driver.c:89`) stays unchanged for both transports.
+- **Status read** loops `poll` and `recv` within a 300 ms deadline, the same budget as the USB status read. It returns the requested bytes once they all arrive, the partial count at timeout, 0 if nothing arrived, and -1 on EOF or error. A reply split across RFCOMM frames is therefore assembled inside one read call, and the driver's existing ten-call accumulation loop (`src/driver.c:89`) stays unchanged for both transports.
 - **Write** loops until every byte is sent and returns -1 on error or EOF, like the USB full write.
 
 The address is parsed with `sscanf` into `bdaddr_t`, so the build needs only the `libbluetooth-dev` headers (`bluetooth.h`, `rfcomm.h`); the binary links no new library and the runtime image is unchanged.

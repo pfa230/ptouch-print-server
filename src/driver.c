@@ -9,6 +9,8 @@
 #include "raster.h"
 #include "status.h"
 #include "device_usb.h"
+#include "device_bt.h"
+#include "config.h"
 #include "cutter.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -57,6 +59,18 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
     return accepted == (ssize_t)n && after.write_bytes - before.write_bytes == n;
 }
 
+/* Live printer transports; the socket test sink has no status path. */
+static bool pt_live_uri(const char *uri)
+{
+    return pt_usb_is_uri(uri) || pt_bt_is_uri(uri);
+}
+
+static ssize_t pt_read_status(pappl_device_t *device, const char *uri, void *buffer, size_t bytes)
+{
+    return pt_bt_is_uri(uri) ? pt_bt_read_status(device, uri, buffer, bytes)
+                             : pt_usb_read_status(device, uri, buffer, bytes);
+}
+
 /* The device may not have the 32-byte status reply ready on the first read, so
  * poll a few times with a short delay, mirroring upstream ptouch_getstatus. Each
  * read is itself bounded (300 ms) so the loop cannot hang: ~4 s worst case. */
@@ -70,12 +84,12 @@ typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
 /* Read the live tape from an already-open device: ESC i S, then poll for
  * the reply. The caller owns the device and interprets the result; a supported
  * tape is `parsed && st.tape_px > 0`. Validate transport before any command or
- * connection-data access; a socket sink has no USB status path. */
+ * connection-data access; a socket sink has no status path. */
 static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
 {
     uint8_t cmd[8];
     pt_live_read r = {0};
-    if (!pt_usb_is_uri(uri)) {
+    if (!pt_live_uri(uri)) {
         r.n = -1;
         return r;
     }
@@ -89,7 +103,7 @@ static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
     for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
         struct timespec w = {0, PT_STATUS_POLL_NS};
         nanosleep(&w, NULL);
-        ssize_t n = pt_usb_read_status(device, uri, buf + used, sizeof buf - used);
+        ssize_t n = pt_read_status(device, uri, buf + used, sizeof buf - used);
         if (n < 0) { r.n = n; break; }
         used += (size_t)n;
         r.n = (ssize_t)used;
@@ -216,6 +230,9 @@ typedef struct {
     const pt_dev *model;
     pt_run run;
     bool media_confirmed;
+    int idle_poll_seconds;        /* -1: every PAPPL request; 0: never; N: minimum gap */
+    bool idle_polled;
+    struct timespec last_idle_poll;
 } pt_printer_state;
 
 static pt_printer_state *pt_state(pappl_printer_t *printer)
@@ -430,7 +447,7 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     return pt_dev_write(d, buf, length) || pt_fail_job(j);
 }
 
-/* Wait for receive-ready, not just print-completed. This is USB flow control,
+/* Wait for receive-ready, not just print-completed. This is printer flow control,
  * independent of the client finishing choice. No commands are sent here. */
 #define PT_PRINT_READY_TIMEOUT_MS 20000
 static long pt_ms_since(const struct timespec *t0);
@@ -438,14 +455,14 @@ static long pt_ms_since(const struct timespec *t0);
 static bool pt_wait_ready(pappl_job_t *j, pappl_device_t *d)
 {
     const char *uri = papplPrinterGetDeviceURI(papplJobGetPrinter(j));
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri)) return true;
     uint8_t packet[32];
     size_t used = 0;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     while (pt_ms_since(&start) < PT_PRINT_READY_TIMEOUT_MS) {
         if (papplJobIsCanceled(j)) return false;
-        ssize_t n = pt_usb_read_status(d, uri, packet + used, sizeof packet - used);
+        ssize_t n = pt_read_status(d, uri, packet + used, sizeof packet - used);
         if (n < 0) {
             papplJobSetMessage(j, "printer status read failed after printing");
             return false;
@@ -609,15 +626,36 @@ static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live)
     return false;
 }
 
+/* Claim an idle probe slot. The slot is taken when the attempt starts, so a
+ * failed open also waits out the interval instead of retrying on every query. */
+static bool pt_idle_poll_due(pappl_printer_t *printer)
+{
+    pt_printer_state *state = pt_state(printer);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    pthread_mutex_lock(&state->lock);
+    bool due = state->idle_poll_seconds < 0 ||
+        (state->idle_poll_seconds > 0 &&
+         (!state->idle_polled || now.tv_sec - state->last_idle_poll.tv_sec >= state->idle_poll_seconds));
+    if (due) {
+        state->idle_polled = true;
+        state->last_idle_poll = now;
+    }
+    pthread_mutex_unlock(&state->lock);
+    return due;
+}
+
 static bool status_cb(pappl_printer_t *printer)
 {
     /* The job owns live status and may have an unfinished command in flight. */
     if (papplPrinterGetState(printer) == IPP_PSTATE_PROCESSING) return true;
     if (pt_recovery_required(printer)) return true;
     const char *uri = papplPrinterGetDeviceURI(printer);
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri) || !pt_idle_poll_due(printer)) return true;
     const pt_dev *model = pt_state(printer)->model;
-    ssize_t count = pt_usb_count(model->vid, model->pid);
+    /* USB enumeration tells "unplugged" from "in use"; Bluetooth's only
+     * reachability check is the connection attempt itself. */
+    ssize_t count = pt_usb_is_uri(uri) ? pt_usb_count(model->vid, model->pid) : 1;
     if (count != 1) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
@@ -631,7 +669,8 @@ static bool status_cb(pappl_printer_t *printer)
         if (papplPrinterGetState(printer) == IPP_PSTATE_PROCESSING) return true;
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
-        papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "%s is present but cannot be opened or claimed", model->name);
+        if (pt_usb_is_uri(uri))
+            papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "%s is present but cannot be opened or claimed", model->name);
         return true;
     }
     /* Status requests do not initialize or finalize the printer. */
@@ -664,7 +703,7 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
         return false;
     }
     const char *uri = papplPrinterGetDeviceURI(printer);
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri)) return true;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     do {
@@ -699,11 +738,23 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
                  "Printer identity '%s' does not match USB URI '%s'", model, device_uri);
         return false;
     }
+    if (device_uri && !strncmp(device_uri, "ptouch-bt://", 12) &&
+        (!pt_bt_is_uri(device_uri) || dev->pid != 0x20af)) {
+        papplLog(system, PAPPL_LOGLEVEL_ERROR,
+                 "Printer identity '%s' does not match Bluetooth URI '%s'", model, device_uri);
+        return false;
+    }
+    int idle_poll_seconds;
+    if (!pt_parse_idle_poll(getenv("PTOUCH_IDLE_POLL_SECONDS"), &idle_poll_seconds)) {
+        papplLog(system, PAPPL_LOGLEVEL_ERROR, "Invalid PTOUCH_IDLE_POLL_SECONDS");
+        return false;
+    }
 
     pt_printer_state *state = calloc(1, sizeof *state);
     if (!state) return false;
     if (pthread_mutex_init(&state->lock, NULL)) { free(state); return false; }
     state->model = dev;
+    state->idle_poll_seconds = idle_poll_seconds;
     data->extension = state;
 
     data->rstartjob_cb = r_startjob;
