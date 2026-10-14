@@ -26,20 +26,34 @@ Only the implemented PT-2730 and PT-P710BT paths SHALL receive print output. Mis
 - **WHEN** PT-P710BT is selected with a Bluetooth address
 - **THEN** the queue's device URI names that address, and USB enumeration plays no part in selection
 
+### Requirement: Container hotplug and addressing
+
+USB container deployment SHALL bind-mount `/dev/bus/usb` and allow USB character devices with `c 189:* rwm` so newly numbered nodes remain accessible. dbus/Avahi SHALL receive a nofile limit of 65536. Reverse proxies SHALL forward a Host accepted by PAPPL; shared-network clients MAY use a stable alias. Discovery, TLS termination, and network exposure SHALL remain deployment choices.
+
+#### Scenario: Hotplug behind a proxy
+
+- **WHEN** the printer is replugged in a container reached through a reverse proxy
+- **THEN** the new USB node is accessible and the proxy supplies an accepted Host without changing the print contract
+
 ## ADDED Requirements
 
 ### Requirement: Private Bluetooth transport
 
-The adapter SHALL reach a Bluetooth printer through an internal scheme over a kernel RFCOMM socket, without a host serial bridge or in-server pairing. Connects SHALL be bounded. Status readers SHALL validate the owning printer URI before accessing Bluetooth connection data, as for USB.
+The adapter SHALL reach a Bluetooth printer through an internal scheme over a kernel RFCOMM socket, without a host serial bridge or in-server pairing. A connect attempt SHALL give up within 10 seconds. Status readers SHALL validate the owning printer URI before accessing Bluetooth connection data, as for USB.
 
 #### Scenario: Transport isolation
 
 - **WHEN** USB, Bluetooth, and socket test URIs are each evaluated by status processing
 - **THEN** each reaches only its own transport's operations
 
+#### Scenario: Absent printer
+
+- **WHEN** the configured printer is off or out of range
+- **THEN** each connect attempt fails within 10 seconds and the queue reports the printer offline
+
 ### Requirement: Bluetooth container deployment
 
-A Bluetooth deployment SHALL run the container in the host network namespace, because the kernel refuses Bluetooth sockets elsewhere. Pairing SHALL be a host step whose keys persist across host reboots. The container SHALL need no BlueZ and no added capability. Exactly one mDNS responder SHALL serve the host.
+A Bluetooth deployment SHALL run the container in the host network namespace, because the kernel refuses Bluetooth sockets elsewhere. It SHALL need no USB device mount. Pairing SHALL be a host step whose keys persist across host reboots. The container SHALL need no BlueZ and no added capability. Exactly one mDNS responder SHALL serve the host.
 
 #### Scenario: Pi reboot
 
@@ -48,7 +62,12 @@ A Bluetooth deployment SHALL run the container in the host network namespace, be
 
 ### Requirement: Multi-architecture runtime image
 
-Published image tags SHALL include `linux/amd64` and `linux/arm64` variants built from the same `Dockerfile.deploy`, each passing the build's CTest run before publication.
+Published image tags SHALL include `linux/amd64` and `linux/arm64` variants built from the same `Dockerfile.deploy`. Both architectures SHALL build and pass the build's CTest run on pull requests, before anything is published.
+
+#### Scenario: Pull request build
+
+- **WHEN** a pull request changes the image
+- **THEN** CI builds both architectures and runs CTest in each without publishing
 
 #### Scenario: Pull on a Pi
 

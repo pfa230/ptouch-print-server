@@ -7,9 +7,9 @@ The owner wants the PT-P710BT to run on its own battery and travel around the ho
 ## What Changes
 
 - Add a Bluetooth RFCOMM transport for the PT-P710BT, selected by configuring the printer's Bluetooth address (`PTOUCH_BT_ADDRESS`). The queue then uses only Bluetooth, never USB, and does not fall back to USB. Configuring an address for any other model fails startup.
-- Connect only while a job or status read owns the device and disconnect afterwards. The printer stays available to its phone app between jobs.
+- Keep PAPPL's device lifetime: connect when a job starts, share the connection across queued jobs, and disconnect when the queue goes idle. Idle status reads connect briefly. The printer is free for its phone app whenever the queue is idle.
 - Treat an unreachable printer (switched off, out of range, or held by another Bluetooth client) as offline. Queued jobs wait and print when the printer becomes reachable. Reuse the existing offline, media-confirmation, finishing, continuation and uncertain-output contracts unchanged.
-- Make idle status polling configurable for every transport with `PTOUCH_IDLE_POLL_SECONDS`. Absent keeps today's behavior, `0` disables idle polling so status refreshes only during jobs, and a positive value sets the minimum seconds between idle polls. An invalid value fails startup.
+- Make idle status polling configurable for every transport with `PTOUCH_IDLE_POLL_SECONDS`. Absent keeps today's behavior, `0` disables idle polling so status refreshes only during jobs, and a positive value sets the minimum seconds between idle probe attempts, including failed ones. An invalid value fails startup.
 - Publish the runtime image for `linux/arm64` as well as `linux/amd64` under the same tags.
 - Document Pi deployment: pairing, host networking, and the required container settings.
 
@@ -28,7 +28,7 @@ None. Transport selection and status polling belong to the existing printer-devi
 
 ## Impact
 
-Code: a new Bluetooth device scheme beside `src/device_usb.c`, transport-neutral status reads in `src/driver.c`, configuration parsing in `src/main.c`, and polling control in `status_cb`. Tests: fake-socket adapter tests for the Bluetooth scheme and the polling setting, plus core regressions showing unchanged bytes. CI: `.github/workflows/deploy.yml` builds and publishes arm64. Runtime image: no new libraries (RFCOMM uses the kernel socket API). Docs: README, deployment notes, and a bounded Bluetooth acceptance gate.
+Code: a new Bluetooth device scheme beside `src/device_usb.c`, transport-neutral status reads in `src/driver.c`, configuration parsing in `src/main.c`, and polling control in `status_cb`. Tests: fake-socket adapter tests for the Bluetooth scheme and the polling setting, plus core regressions showing unchanged bytes. CI: `.github/workflows/deploy.yml` builds and publishes arm64. Build: `libbluetooth-dev` headers in both Dockerfiles. Runtime image: no new libraries (RFCOMM uses the kernel socket API). Docs: README, deployment notes, and a bounded Bluetooth acceptance gate.
 
 No new client attribute, IPP behavior, rendering rule or dependency fork. USB deployments that leave both new variables unset keep their exact current behavior.
 
