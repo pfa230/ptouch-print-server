@@ -646,7 +646,7 @@ static size_t transport_batch(pappl_printer_t *printer, const char *finishing, p
 {
     pt_run_set(printer, PT_RUN_CLOSED); reset_wire();
     ready_status(0, 7); statuses[18] = statuses[19] = 0; status_size = 32;
-    pappl_job_t *j = job(printer, finishing, 1, false);
+    pappl_job_t *j = job(printer, finishing, 1, !strcmp(finishing, "ptouch-chain"));
     pappl_pr_options_t *o = begin(j, d);
     assert(page_test(j, o, d));
     ready_status(0, 7); assert(page_test(j, o, d));
@@ -677,14 +677,18 @@ static void bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_dev
     can_open = false; assert(status_cb(bt)); can_open = true;
     assert(!pt_media_confirmed(bt) && (papplPrinterGetReasons(bt) & PAPPL_PREASON_OFFLINE));
 
-    static unsigned char usb_wire[sizeof wire], bt_wire[sizeof wire];
+    /* Each policy yields distinct bytes, identical on both transports. */
+    static unsigned char usb_wire[sizeof wire], bt_wire[4][sizeof wire];
+    size_t bt_sizes[4];
     const char *finishings[] = {"none", "trim", "trim-after-job", "ptouch-chain"};
-    for (unsigned i = 0; i < sizeof finishings / sizeof finishings[0]; i++) {
+    for (unsigned i = 0; i < 4; i++) {
         unsigned saved_usb = usb_enumerations, saved_reads = usb_reads;
         size_t usb_size = transport_batch(usb, finishings[i], d, usb_wire);
         usb_enumerations = saved_usb; usb_reads = saved_reads;
-        size_t bt_size = transport_batch(bt, finishings[i], d, bt_wire);
-        assert(usb_size == bt_size && !memcmp(usb_wire, bt_wire, bt_size));
+        bt_sizes[i] = transport_batch(bt, finishings[i], d, bt_wire[i]);
+        assert(usb_size == bt_sizes[i] && !memcmp(usb_wire, bt_wire[i], bt_sizes[i]));
+        for (unsigned k = 0; k < i; k++)
+            assert(bt_sizes[k] != bt_sizes[i] || memcmp(bt_wire[k], bt_wire[i], bt_sizes[i]));
     }
 
     /* Link loss during raster: the job fails, cleanup sends nothing, and the
@@ -727,7 +731,13 @@ static void bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_dev
     state->idle_poll_seconds = 300; state->idle_polled = false; opened = opens;
     clean_snapshot(); assert(status_cb(bt)); assert(status_cb(bt));
     assert(opens == opened + 1 && pt_media_confirmed(bt));
-    state->last_idle_poll.tv_sec -= 300;
+    /* The interval is exact: 299.5 s is too early, 300 s is due. */
+    clock_gettime(CLOCK_MONOTONIC, &state->last_idle_poll);
+    state->last_idle_poll.tv_sec -= 299;
+    state->last_idle_poll.tv_nsec -= 500000000L;
+    if (state->last_idle_poll.tv_nsec < 0) { state->last_idle_poll.tv_sec--; state->last_idle_poll.tv_nsec += 1000000000L; }
+    assert(status_cb(bt) && opens == opened + 1);
+    state->last_idle_poll.tv_sec -= 1;
     clean_snapshot(); assert(status_cb(bt) && opens == opened + 2);
     can_open = false; state->idle_polled = false; opened = opens;
     for (int i = 0; i < 3; i++) assert(status_cb(bt));

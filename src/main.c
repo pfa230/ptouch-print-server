@@ -195,6 +195,10 @@ int main(int argc, char *argv[])
         fprintf(stderr, "PTOUCH_BT_ADDRESS=%s is not a Bluetooth address (XX:XX:XX:XX:XX:XX)\n", address);
         return EXIT_FAILURE;
     }
+    if (address && override_uri && *override_uri) {
+        fprintf(stderr, "PTOUCH_DEVICE_URI and PTOUCH_BT_ADDRESS cannot both be set\n");
+        return EXIT_FAILURE;
+    }
     if (address && model->pid != 0x20af) {
         fprintf(stderr, "PTOUCH_BT_ADDRESS requires PTOUCH_MODEL=PT-P710BT; %s has no Bluetooth\n", model->name);
         return EXIT_FAILURE;

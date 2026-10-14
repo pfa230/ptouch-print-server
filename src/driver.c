@@ -631,15 +631,13 @@ static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live)
 static bool pt_idle_poll_due(pappl_printer_t *printer)
 {
     pt_printer_state *state = pt_state(printer);
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
     pthread_mutex_lock(&state->lock);
     bool due = state->idle_poll_seconds < 0 ||
         (state->idle_poll_seconds > 0 &&
-         (!state->idle_polled || now.tv_sec - state->last_idle_poll.tv_sec >= state->idle_poll_seconds));
+         (!state->idle_polled || pt_ms_since(&state->last_idle_poll) >= state->idle_poll_seconds * 1000L));
     if (due) {
         state->idle_polled = true;
-        state->last_idle_poll = now;
+        clock_gettime(CLOCK_MONOTONIC, &state->last_idle_poll);
     }
     pthread_mutex_unlock(&state->lock);
     return due;

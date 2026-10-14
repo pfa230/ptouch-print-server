@@ -331,6 +331,9 @@ int main(void)
     setenv("PTOUCH_BT_ADDRESS", "A4:C1:38:AB:CD", 1);
     assert(pt_application_main(2, server) == EXIT_FAILURE);
     setenv("PTOUCH_BT_ADDRESS", "A4:C1:38:AB:CD:EF", 1);
+    setenv("PTOUCH_DEVICE_URI", "socket://127.0.0.1:9100", 1);
+    assert(pt_application_main(2, server) == EXIT_FAILURE);
+    unsetenv("PTOUCH_DEVICE_URI");
     const char *bad_polls[] = { "-1", "1.5", "soon" };
     for (size_t i = 0; i < sizeof bad_polls / sizeof bad_polls[0]; i++) {
         setenv("PTOUCH_IDLE_POLL_SECONDS", bad_polls[i], 1);

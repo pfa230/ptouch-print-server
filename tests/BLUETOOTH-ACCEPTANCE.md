@@ -19,25 +19,29 @@ G=tests/bluetooth-gate
 python3 -I $G/make-fixture.py label.png
 enum() { ipptool -t -d finishings=$1 -d copies=$2 -f label.png "$U" $G/print-enum.ipp; }
 chain() { ipptool -t -d copies=$1 -f label.png "$U" $G/print-chain.ipp; }
+state() { ipptool -tv "$U" $G/get-printer-state.ipp | grep -E 'printer-state|media-ready'; }
+times() { ipptool -tv "$U" $G/get-job-times.ipp | grep -E 'job-id|job-state|time-at'; }
 ```
 
-On the Pi, in a second terminal, log the link once a second for the whole gate:
+On the Pi, in a second terminal, record every connect and disconnect for the whole gate. BlueZ signals each change of the device's `Connected` property, so no event is missed between samples:
 
 ```sh
-while sleep 1; do echo "$(date +%T) $(bluetoothctl info $ADDR | grep Connected)"; done | tee connected.log
+dbus-monitor --system "type='signal',path='/org/bluez/hci0/dev_${ADDR//:/_}'" | tee connected.log
 ```
+
+`grep -A1 '"Connected"' connected.log` lists the changes in order; each signal header line carries its time.
 
 ## Steps
 
 | Step | Action | Labels | Pass criteria |
 |------|--------|-------:|---------------|
-| 1 | `sudo docker exec ptouch ptouch-app status -d ptouch` with the printer on | 0 | Status shows no `offline`; `media-ready` reports 12 mm. The printer neither feeds nor cuts (status reads send no reset). |
-| 2 | `enum 11 1`; record the submit-to-`completed` time from `ptouch-app jobs -d ptouch` | 1 | One intact 76-dot outline at 1:1, fresh leader removed, final cut. Job `completed`, not aborted. |
-| 3 | Run `enum 11 1; enum 11 1` back to back | 2 | Two separate cut labels. `connected.log` shows one continuous `Connected: yes` span covering both jobs, then `no` once the queue is idle. |
-| 4 | `chain 2`; wait for `Connected: no`, then 10 more seconds; `enum 60 2` | 4 | First job: internal cut, last end held. Second job: the held end is released without a new discarded leader, internal cut, final cut. If the held end was lost or a new leader appears, **stop**: that is a contract decision, not a retry. |
-| 5 | Switch the printer off. `time sudo docker exec ptouch ptouch-app status -d ptouch` | 0 | Reports `offline`; the command returns within 11 seconds. Record the time. |
+| 1 | With the printer on, `state` | 0 | A fresh connection answers status: `printer-state-reasons` is `none` and `media-ready` is a 12 mm size. The printer neither feeds nor cuts (status reads send no reset). |
+| 2 | `enum 11 1`, then `times` | 1 | One intact 76-dot outline at 1:1, fresh leader removed, final cut. The job is `completed`, not aborted; record `time-at-completed` minus `time-at-processing`. The job only completes after the printer reports receiving-ready, which the server waits up to 20 s for, so this duration bounds the receiving-ready time. |
+| 3 | Switch the printer off. Run `enum 11 1` twice; both jobs wait. Switch the printer on | 2 | Both queued jobs print as two separate cut labels. `connected.log` shows exactly one connect before the first label and one disconnect after the second, with none between them. |
+| 4 | `chain 2`; wait until `connected.log` shows the disconnect, then 10 more seconds; `enum 60 2` | 4 | First job: internal cut, last end held. Second job, on a new connection: the held end is released without a new discarded leader, internal cut, final cut. If the held end was lost or a new leader appears, **stop**: that is a contract decision, not a retry. |
+| 5 | Switch the printer off. `time state` | 0 | Reports `offline` and returns within 11 seconds. Record the time. |
 | 6 | With the printer still off, `enum 11 1`; wait 30 s; switch the printer on | 1 | The job waits (not aborted) while off and prints once the printer is on. Intact outline, final cut. |
-| 7 | Recreate the container with `-e PTOUCH_IDLE_POLL_SECONDS=0`; run `ptouch-app status -d ptouch` five times over one minute | 0 | `connected.log` stays `Connected: no` for that minute; `docker logs` shows no new `not reachable` or status lines. |
+| 7 | Recreate the container with `-e PTOUCH_IDLE_POLL_SECONDS=0`; with the printer on and idle, run `state` five times over one minute | 0 | `connected.log` records no connect during that minute. |
 | 8 | `sudo reboot` the Pi; after boot, without pairing again, `enum 11 1` | 1 | The container is running after boot and the label prints. |
 | | **Total** | **9** | |
 
