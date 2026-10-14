@@ -248,7 +248,7 @@ protocol still follow `PTOUCH_MODEL`, and the printer connects on an actual prin
 An explicit `ptouch://Brother/<model>` override must exactly match the configured
 supported model; conflicting or unsupported custom USB URIs fail before commands.
 
-`PTOUCH_BT_ADDRESS` selects Bluetooth instead of USB for `PTOUCH_MODEL=PT-P710BT`. Set it to the paired printer's address, `XX:XX:XX:XX:XX:XX`. The server connects over RFCOMM channel 1 when a job starts, keeps the connection while jobs are queued, and closes it when the queue goes idle. USB is never used and never a fallback. A printer that is off, out of range, or connected to another device shows as offline, and queued jobs wait until it is reachable. A connection attempt gives up after 10 seconds. An address with another model, or a malformed address, fails startup. Bluetooth needs host networking; see [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
+`PTOUCH_BT_ADDRESS` selects Bluetooth instead of USB for `PTOUCH_MODEL=PT-P710BT`. Set it to the paired printer's address, `XX:XX:XX:XX:XX:XX`. The server connects over RFCOMM channel 1 when a job starts, keeps the connection while jobs are queued, and closes it when the queue goes idle. USB is never used and never a fallback. A printer that is off, out of range, or connected to another device shows as offline, and queued jobs wait until it is reachable. A connection attempt gives up after 10 seconds. An address with another model, a malformed address, or an address combined with `PTOUCH_DEVICE_URI` fails startup. Bluetooth needs host networking; see [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
 
 `PTOUCH_IDLE_POLL_SECONDS` controls printer status reads while the queue is idle, on either transport:
 
