@@ -1,1 +1,3 @@
 build/
+.worktrees/
+openspec/loop.local.yaml
