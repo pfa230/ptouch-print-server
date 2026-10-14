@@ -1,0 +1,18 @@
+defaultBranch: main
+worktrees: .worktrees
+agents:
+  codex: [loop-codex, -s, read-only]
+  opus: [loop-claude, --model, opus, --permission-mode, auto]
+roles:
+  proposalReviewer: codex
+  planReviser: opus
+  implementer: opus
+  implementationReviewer: codex
+attempts:
+  proposalReview: 3
+  implementation: 3
+checks:
+  # The host lacks PAPPL, so only the hardware-free core builds here; the adapter builds and tests in the container.
+  - cmake -S . -B build -DPTOUCH_CORE_ONLY=ON && cmake --build build && ctest --test-dir build --output-on-failure
+  - openspec validate --all --strict --no-interactive
+delivery: pr
