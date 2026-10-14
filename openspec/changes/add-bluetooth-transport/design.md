@@ -41,7 +41,7 @@ Add `src/device_bt.c` registering a `ptouch-bt://` scheme (`ptouch-bt://Brother/
 The scheme's callbacks keep the USB return conventions so the driver needs no transport-specific handling:
 
 - **Connect** is non-blocking with a 10-second deadline, then the socket returns to blocking mode. Ten seconds covers Bluetooth paging (about 5 seconds) plus RFCOMM setup, and replaces the kernel's 30-second default so an absent printer cannot stall a status read for half a minute.
-- **Status read** waits up to the same 300 ms as the USB status read and returns the bytes available, 0 on timeout, and -1 on EOF or error. The existing bounded accumulation loop then handles fragmented replies unchanged.
+- **Status read** receives with `MSG_WAITALL` and a 300 ms receive timeout, the same budget as the USB status read. It returns the requested bytes once they all arrive, the partial count at timeout, 0 if nothing arrived, and -1 on EOF or error. A reply split across RFCOMM frames is therefore assembled inside one read call, and the driver's existing ten-call accumulation loop (`src/driver.c:89`) stays unchanged for both transports.
 - **Write** loops until every byte is sent and returns -1 on error or EOF, like the USB full write.
 
 The address is parsed with `sscanf` into `bdaddr_t`, so the build needs only the `libbluetooth-dev` headers (`bluetooth.h`, `rfcomm.h`); the binary links no new library and the runtime image is unchanged.
@@ -80,6 +80,7 @@ Alternative: a native `ubuntu-24.04-arm` job plus a manifest merge. Faster, but 
 
 - [The printer may treat a Bluetooth disconnect as a session end and drop a held chain end between jobs] → Queued jobs share one connection, so only a continuation after the queue went idle crosses a reconnect. The acceptance gate tests that idle boundary. If the held end is lost, the change documents that limit rather than altering the continuation contract silently.
 - [The server queries status before initializing and waits up to 20 seconds for receiving-ready (`src/driver.c:74`, `src/driver.c:435`); the reference script initializes first and stops at print-completed] → The acceptance gate checks a reset-free status reply on a fresh connection and records receiving-ready timing.
+- [A held job keeps the connection open: PAPPL counts held jobs as active (`pappl/job.c:175`), so if job A finishes while job B is held, the device stays open, and canceling B does not close it (`pappl/job.c:42`)] → Accepted as a known limit, not fixed: ordinary `lp` and AirPrint submissions do not request `job-hold-until`, and fixing it means patching PAPPL's device lifetime. Restarting the container releases the connection. Revisit if a held-job workflow appears.
 - [Walking out of range mid-job leaves output uncertain] → The existing uncertain-output contract applies: the queue blocks and requires power-cycle plus restart. Documented as the expected cost of losing the link during a print.
 - [A connect to an absent printer blocks for up to the 10-second deadline] → Status reads are skipped while a job owns the device, polling intervals count failed attempts, and polling `0` avoids idle connects entirely. The gate measures the actual connect failure time.
 - [Writes may need pacing over RFCOMM] → Blocking writes rely on RFCOMM flow control. If acceptance shows corruption, add pacing then, with evidence.
