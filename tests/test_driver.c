@@ -35,6 +35,9 @@ static ssize_t usb_matches = 1;
 static unsigned usb_enumerations, usb_reads;
 static pappl_printer_t *poll_during_job;
 static bool busy_poll_checked;
+/* Cancel this job during the status read that starts at cancel_read_at. */
+static pappl_job_t *cancel_during_read;
+static size_t cancel_read_at;
 
 ssize_t pt_usb_count(uint16_t vid, uint16_t pid)
 { assert(vid == selected_model->vid && pid == selected_model->pid); usb_enumerations++; return usb_present ? usb_matches : 0; }
@@ -57,6 +60,9 @@ ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, siz
     (void)d; (void)uri;
     pthread_mutex_lock(&fixture_lock);
     usb_reads++;
+    if (cancel_during_read && status_used == cancel_read_at) {
+        papplJobCancel(cancel_during_read); cancel_during_read = NULL;
+    }
     ssize_t result = -1;
     if (status_used == status_gap_at && status_gap_reads) {
         status_gap_reads--;
@@ -810,6 +816,15 @@ static void wait_cases(pappl_printer_t *usb, pappl_device_t *d)
     pthread_t canceler; assert(!pthread_create(&canceler, NULL, act_on_wait, &w));
     assert(!r_startpage(j, o, d, 0)); pthread_join(canceler, NULL);
     assert(w.acted && papplJobIsCanceled(j) && status_requests(&other) >= 2 && !other);
+    assert(pt_run_get(usb) == PT_RUN_CLOSED && !(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    end(j, o, d);
+    /* Cancellation during a read that reports the wanted tape still sends no print commands. */
+    assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    const int matching[] = {18, 12}; queue_tapes(matching, 2, false);
+    j = media_job(usb, "none", 1, false, twelve); o = begin(j, d);
+    cancel_during_read = j; cancel_read_at = 32;
+    assert(!r_startpage(j, o, d, 0) && !cancel_during_read && papplJobIsCanceled(j));
+    assert(status_requests(&other) == 2 && !other && status_used == 64);
     assert(pt_run_get(usb) == PT_RUN_CLOSED && !(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
     end(j, o, d);
     /* A status I/O error aborts the wait with a specific message. */

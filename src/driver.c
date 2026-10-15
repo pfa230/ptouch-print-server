@@ -401,6 +401,7 @@ static bool pt_wait_for_tape(pappl_job_t *j, pappl_device_t *d, int wanted)
     papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Waiting for %d mm tape; %d mm loaded", wanted, loaded);
     while (!papplJobIsCanceled(j)) {
         pt_live_read live = pt_read_live_tape(d, uri);
+        if (papplJobIsCanceled(j)) break;
         if (live.n < 0) {
             papplJobSetMessage(j, "Cannot read loaded tape while waiting for %d mm tape", wanted);
             papplLogJob(j, PAPPL_LOGLEVEL_ERROR, "%s", papplJobGetMessage(j));
