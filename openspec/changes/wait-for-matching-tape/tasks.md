@@ -7,11 +7,6 @@
 - [ ] 1.3 Confirm that the socket-transport wrong-tape checks still abort without output: `tests/test_png_geometry.c` media cases 6 and 9, and the `om_18x50mm` submission in `scripts/smoke-image.py`. Verify by running both image smoke variants (`--model PT-2730`, `--model PT-P710BT`) against a locally built deploy image.
 - [ ] 1.4 Update the README Capabilities bullet that says a wrong-width job is rejected: a job for another supported width now waits, reports `media-needed`, and prints after the swap; cancel it to give up. Review the text against the label-rendering delta.
 
-## 2. Hardware acceptance
+## 2. Integration
 
-- [ ] 2.1 On PT-2730 with 18 mm tape loaded, submit one 12 mm PNG through the deployed queue and check that the job shows the waiting message and the printer reports `media-needed`. Open the cover, swap to 12 mm tape, and close it; confirm that exactly one label prints at the right size with no extra leader, and that a second queued 18 mm-width job then waits in turn. Cancel that one and confirm that nothing prints. Record the result in `tests/HARDWARE-ACCEPTANCE.md`.
-- [ ] 2.2 Repeat 2.1 on PT-P710BT with 9, 12, and 18 mm tape, and record the result in `tests/P710BT-ACCEPTANCE.md`.
-
-## 3. Integration
-
-- [ ] 3.1 Run `openspec validate wait-for-matching-tape --strict` and confirm it passes. Report the results separately as core tests, adapter tests, socket-IPP smoke, and hardware acceptance.
+- [ ] 2.1 Run `openspec validate wait-for-matching-tape --strict` and confirm it passes. Report the results separately as core tests, adapter tests, and socket-IPP smoke; hardware acceptance is the operator follow-up in design D4.

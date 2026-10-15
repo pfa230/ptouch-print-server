@@ -50,6 +50,10 @@ Alternative: reuse `pt_refresh_ready_media` with a longer deadline. It treats an
 
 The user chose an indefinite wait ended by a tape swap or cancellation. There is no configuration setting.
 
+### D4. Hardware acceptance is an operator follow-up
+
+The user decided that cassette-swap acceptance does not block completion of this change. The change completes on automated verification: the driver tests, the socket wrong-tape checks, and both image smoke variants. After deployment, the operator checks the swap on each printer and records the result in `tests/HARDWARE-ACCEPTANCE.md` (PT-2730) and `tests/P710BT-ACCEPTANCE.md` (PT-P710BT, with 9, 12 and 18 mm tape). The check: with 18 mm tape loaded, submit a 12 mm job and confirm the waiting message and `media-needed`. Then swap the tape and confirm that exactly one label prints at the correct size. Finally, confirm that a job canceled during the wait prints nothing.
+
 ## Risks / Trade-offs
 
 - [A forgotten wrong-width job blocks the queue until someone swaps tape or cancels it] → Accepted by the user. The printer reports `media-needed`, and the job message names the needed tape.
