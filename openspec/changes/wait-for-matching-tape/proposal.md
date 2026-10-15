@@ -25,9 +25,9 @@ None.
 
 ## Impact
 
-Code: `src/driver.c` gains one polling wait in `r_startpage` before the first label's page setup, reusing `pt_read_live_tape` and `pt_publish_tape`. The window check in `r_startpage` resolves margins a job did not submit against the matched tape, so a raster job without explicit media does not keep the loaded tape's margins. `src/filter_png.c` is unchanged because PNG output goes through the same `r_startpage`.
+Code: `src/driver.c` gains one polling wait in `r_startpage` before the first label's page setup, reusing `pt_read_live_tape` and `pt_publish_tape`. One driver function resolves margins a job did not submit against the tape its page matches, so a job without explicit margins does not keep the loaded tape's margins. `r_startpage` calls it before its window check for PWG raster and URF jobs, and `src/filter_png.c` calls it before `pt_preflight_png`, because PNG preflight and PAPPL's image placement both use the margins before `r_startpage` runs.
 
-Tests: `tests/test_driver.c` covers waiting then printing, cancellation during the wait, and loss of status during the wait, both through the driver callbacks and through real PWG raster and URF IPP submissions swapped from 18 mm to 12 mm. The existing socket-transport wrong-tape checks in `tests/test_png_geometry.c` and `scripts/smoke-image.py` still expect an abort with no output, because a socket sink has no status path to wait on.
+Tests: `tests/test_driver.c` covers waiting then printing, cancellation during the wait, and loss of status during the wait, both through the driver callbacks and through real PNG, PWG raster, and URF IPP submissions swapped between 12 mm and 18 mm, including a PNG whose content fits the selected tape but not the loaded tape's inherited margins. The existing socket-transport wrong-tape checks in `tests/test_png_geometry.c` and `scripts/smoke-image.py` still expect an abort with no output, because a socket sink has no status path to wait on.
 
 Hardware: PT-2730 print bytes for a matching tape do not change. A physical check swaps the cassette while a wrong-width job waits, on PT-2730 and on PT-P710BT.
 

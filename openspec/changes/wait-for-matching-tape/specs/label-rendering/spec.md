@@ -14,9 +14,9 @@ The server SHALL advertise supported nominal tape widths and publish their actua
 - **WHEN** a submitted page width differs from the loaded tape
 - **THEN** no page setup or raster for that page reaches the printer until the loaded tape matches, as defined by "Wrong-tape jobs wait for matching tape"
 
-#### Scenario: Raster page without explicit margins
-- **WHEN** a PWG raster or URF job without explicit media margins submits a page for one supported tape width while the printer's default media describes another
-- **THEN** geometry validation uses the published margins of the tape the page matches, not the default media's margins
+#### Scenario: Page without explicit margins
+- **WHEN** a PNG, PWG raster, or URF job without explicit media margins submits a page for one supported tape width while the printer's default media describes another
+- **THEN** PNG preflight, image placement, and geometry validation use the published margins of the tape the page matches, not the default media's margins
 
 #### Scenario: CUPS custom-size rounding
 - **WHEN** CUPS rounds a custom nominal tape width by at most 0.01 mm
