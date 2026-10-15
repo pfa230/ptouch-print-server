@@ -120,9 +120,12 @@ The patch lists the printer's 20 most recent jobs on `/`, newest first, through
 the existing job row callback, so `/`, the printer page, and its Jobs page share
 one row format. That callback appends the job's `job-state-message` to the
 status cell, or, for an aborted or canceled job without one, its
-`job-state-reasons` keywords. Text is HTML-escaped by the existing client
-printer. No IPP behavior, public API, or ABI changes. The deploy-image smoke
-checks that its malformed-PNG job's row on `/` shows the decode failure.
+`job-state-reasons` keywords. When no reason bit is set, it shows the keyword
+IPP reports in that case, `aborted-by-system` or `job-canceled-by-user`. Text is
+HTML-escaped by the existing client printer. No IPP behavior, public API, or ABI
+changes. The deploy-image smoke checks that, on `/`, its malformed-PNG job's row
+shows the decode failure and a job canceled before receiving data shows
+`job-canceled-by-user`.
 
 Remove this patch when a pinned upstream release lists jobs on the multi-queue
 landing page and renders `job-state-message`.

@@ -36,7 +36,7 @@
  
  
    snprintf(uri, sizeof(uri), "%s/jobs", job->printer->uriname);
-@@ -1542,7 +1564,28 @@ job_cb(pappl_job_t    *job,		// I - Job
+@@ -1542,7 +1564,33 @@ job_cb(pappl_job_t    *job,		// I - Job
  	break;
    }
  
@@ -50,11 +50,16 @@
 +  else if (papplJobGetState(job) == IPP_JSTATE_ABORTED || papplJobGetState(job) == IPP_JSTATE_CANCELED)
 +  {
 +    const char		*sep = ": ";	// Separator before next keyword
-+    pappl_jreason_t	bit;		// Current reason bit
++    pappl_jreason_t	reasons = job->state_reasons,
++					// Reasons to show
++			bit;		// Current reason bit
++
++    if (!reasons)
++      reasons = papplJobGetState(job) == IPP_JSTATE_ABORTED ? PAPPL_JREASON_ABORTED_BY_SYSTEM : PAPPL_JREASON_JOB_CANCELED_BY_USER;
 +
 +    for (bit = PAPPL_JREASON_ABORTED_BY_SYSTEM; bit <= PAPPL_JREASON_WARNINGS_DETECTED; bit *= 2)
 +    {
-+      if (bit & job->state_reasons)
++      if (bit & reasons)
 +      {
 +        papplClientHTMLPrintf(client, "%s%s", sep, _papplJobReasonString(bit));
 +        sep = ", ";

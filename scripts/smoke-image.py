@@ -302,11 +302,19 @@ def main():
             print(output)
             wire = sink.take()
             assert wire == b"", "Malformed PNG emitted printer commands"
-            # The landing page lists the failed job with its reason.
-            job_id = re.search(r"job-id \(integer\) = (\d+)", output).group(1)
+            # A job canceled before it has data has no message and no reason bits.
+            canceled = ipp(url, directory,
+                           operation("Create-Job", "", "EXPECT job-id WITH-VALUE >0 DEFINE-VALUE job-id")
+                           + operation("Cancel-Job", "ATTR integer job-id $job-id", "")
+                           + operation("Get-Job-Attributes", "ATTR integer job-id $job-id",
+                                       "EXPECT job-state WITH-VALUE 7"))
+            print(canceled)
+            # The landing page lists the failed jobs with their reasons.
             home = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).read().decode()
-            row = re.search(rf"<tr><td>{job_id}</td>.*?</tr>", home, re.S)
-            assert row and "PNG decode failed: " in row.group(0), row
+            for result, reason in ((output, "PNG decode failed: "), (canceled, ": job-canceled-by-user")):
+                job_id = re.search(r"job-id \(integer\) = (\d+)", result).group(1)
+                row = re.search(rf"<tr><td>{job_id}</td>.*?</tr>", home, re.S)
+                assert row and reason in row.group(0), row
             print(submit(url, directory, image, "ATTR enum finishings 60"))
             commands = decode(sink.take(), args.model)
             check_geometry(commands, 1)
