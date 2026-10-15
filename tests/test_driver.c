@@ -757,6 +757,8 @@ int main(int argc, char **argv)
             assert(r_endjob(j, o, d) && wire_used == failed_output);
             papplJobDeletePrintOptions(o);
         }
+        assert(!strcmp(papplJobGetMessage(j),
+                       "Write to printer failed; output uncertain: power-cycle printer, then restart server"));
         assert(pt_run_get(p) == PT_RUN_UNCERTAIN);
         reset_wire();
         pappl_job_t *follower = job(p, "trim", 1, false);
@@ -947,6 +949,13 @@ int main(int argc, char **argv)
     end(blocked, blocked_options, d);
     /* A fresh server/fixture state after the operator's power-cycle. */
     pt_run_set(usb, PT_RUN_CLOSED);
+    /* A failed status request names its cause and sends no page output. */
+    reset_wire(); fail_opcode = 27;
+    pappl_job_t *unsent = job(usb, "none", 1, false);
+    pappl_pr_options_t *unsent_options = papplJobCreatePrintOptions(unsent, 1, false);
+    assert(!r_startjob(unsent, unsent_options, d) && wire_used == 0);
+    assert(!strcmp(papplJobGetMessage(unsent), "Status request to printer failed; nothing was printed"));
+    end(unsent, unsent_options, d); reset_wire();
 
     /* Cassette detection must survive an open none run without ESC @. */
     pappl_printer_t *poll = papplPrinterCreate(sys, 0, "poll", "brother_ptouch",

@@ -1,0 +1,73 @@
+--- a/pappl/printer-webif.c
++++ b/pappl/printer-webif.c
+@@ -1060,6 +1060,27 @@ _papplPrinterWebIteratorCallback(
+     papplClientHTMLPrintf(client, " <a class=\"btn\" href=\"%s://%s:%d%s/delete\">%s</a>", _papplClientGetAuthWebScheme(client), client->host_field, client->host_port, printer->uriname, papplClientGetLocString(client, _PAPPL_LOC("Delete Printer")));
+ 
+   papplClientHTMLPuts(client, "<br clear=\"all\"></div>\n");
++
++  if (!strcmp(client->uri, "/") && (client->system->options & PAPPL_SOPTIONS_MULTI_QUEUE))
++  {
++    if (papplPrinterGetNumberOfJobs(printer) > 0)
++    {
++      papplClientHTMLPrintf(client,
++			    "          <table class=\"list\" summary=\"Jobs\">\n"
++			    "            <thead>\n"
++			    "              <tr><th>%s</th><th>%s</th><th>%s</th><th>%s</th><th>%s</th><th></th></tr>\n"
++			    "            </thead>\n"
++			    "            <tbody>\n", papplClientGetLocString(client, _PAPPL_LOC("Job #")), papplClientGetLocString(client, _PAPPL_LOC("Name")), papplClientGetLocString(client, _PAPPL_LOC("Owner")), papplClientGetLocString(client, _PAPPL_LOC("Pages")), papplClientGetLocString(client, _PAPPL_LOC("Status")));
++
++      papplPrinterIterateAllJobs(printer, (pappl_job_cb_t)job_cb, client, 1, 20);
++
++      papplClientHTMLPuts(client,
++			  "            </tbody>\n"
++			  "          </table>\n");
++    }
++    else
++      papplClientHTMLPrintf(client, "          <p>%s</p>\n", papplClientGetLocString(client, _PAPPL_LOC("No jobs in history.")));
++  }
+ }
+ 
+ 
+@@ -1498,6 +1519,7 @@ job_cb(pappl_job_t    *job,		// I - Job
+   char	uri[256],			// Form URI
+ 	when[256],			// When job queued/started/finished
+       	hhmmss[64];			// Time HH:MM:SS
++  const char *message;			// Job state message
+ 
+ 
+   snprintf(uri, sizeof(uri), "%s/jobs", job->printer->uriname);
+@@ -1542,7 +1564,33 @@ job_cb(pappl_job_t    *job,		// I - Job
+ 	break;
+   }
+ 
+-  papplClientHTMLPrintf(client, "              <tr><td>%d</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>", papplJobGetID(job), papplJobGetName(job), papplJobGetUsername(job), papplJobGetImpressionsCompleted(job), when);
++  papplClientHTMLPrintf(client, "              <tr><td>%d</td><td>%s</td><td>%s</td><td>%d</td><td>%s", papplJobGetID(job), papplJobGetName(job), papplJobGetUsername(job), papplJobGetImpressionsCompleted(job), when);
++
++  if ((message = papplJobGetMessage(job)) != NULL)
++  {
++    papplClientHTMLPrintf(client, ": %s", message);
++  }
++  else if (papplJobGetState(job) == IPP_JSTATE_ABORTED || papplJobGetState(job) == IPP_JSTATE_CANCELED)
++  {
++    const char		*sep = ": ";	// Separator before next keyword
++    pappl_jreason_t	reasons = job->state_reasons,
++					// Reasons to show
++			bit;		// Current reason bit
++
++    if (!reasons)
++      reasons = papplJobGetState(job) == IPP_JSTATE_ABORTED ? PAPPL_JREASON_ABORTED_BY_SYSTEM : PAPPL_JREASON_JOB_CANCELED_BY_USER;
++
++    for (bit = PAPPL_JREASON_ABORTED_BY_SYSTEM; bit <= PAPPL_JREASON_WARNINGS_DETECTED; bit *= 2)
++    {
++      if (bit & reasons)
++      {
++        papplClientHTMLPrintf(client, "%s%s", sep, _papplJobReasonString(bit));
++        sep = ", ";
++      }
++    }
++  }
++
++  papplClientHTMLPuts(client, "</td><td>");
+ 
+   if (show_cancel)
+   {
