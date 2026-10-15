@@ -27,7 +27,9 @@ By then PAPPL has moved the job to `processing`. PAPPL 1.4.11's `papplJobHold` r
 
 Split the existing guard into a tape-independent part (resolution, bits per pixel, page length) and a width part. If the tape-independent part fails, fail as today. Otherwise find the supported tape whose geometry `pt_page_width_matches` the page. No match fails as today. A match equal to `tape_mm` continues as today. A different match on the first label waits (D2); on a later label it fails, because a cassette swap would end the run with the earlier labels already printed.
 
-The wait sits after the uncertain-run check and before the pending-label release and `pt_run_set(PT_RUN_UNCERTAIN)`, so a waiting job never changes run state or sends a byte.
+The physical-window check then runs against the matched tape. A PWG raster or URF job without explicit IPP media gets its page dimensions from the raster header (`patches/pappl-1.4.11-raster.patch`) but keeps the margins PAPPL copied from the loaded tape's default media, so a 12 mm page built while 18 mm is loaded carries 18 mm margins and would fail the window check even after the swap. Before the window check, margins the job did not submit in `media-col` are replaced with the matched tape's published margins (`media_col_for`); margins the job submitted stay authoritative and are validated as they are today. When the matched tape is the loaded tape, inherited margins already equal its published margins, so matching jobs are unaffected.
+
+The wait sits after the uncertain-run check and before the pending-label release and `pt_run_set(PT_RUN_UNCERTAIN)`, so a waiting job sends no print command (initialization, page setup, or raster) and never marks the run uncertain. It does send status requests (D2), and publishing a changed tape closes a healthy run as idle polling already does.
 
 Alternatives: waiting in `r_startjob` fails because raster page geometry is not known until the first page header arrives. Waiting in the PNG filter would cover only PNG. Holding the job before processing needs a PAPPL patch to the scheduler.
 
