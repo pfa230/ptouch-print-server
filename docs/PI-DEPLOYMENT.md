@@ -7,6 +7,40 @@ This guide runs the server on a wall-powered Raspberry Pi Zero 2 W and reaches a
 - Raspberry Pi Zero 2 W running **64-bit** Raspberry Pi OS Lite (Bookworm). The published image has `linux/arm64` and `linux/amd64` variants; a 32-bit OS cannot run it.
 - The PT-P710BT, charged, within about 10 m of the Pi. Walls shorten the range.
 
+## Prebuilt SD card
+
+`deploy/pi/` builds a card that does everything below unattended and survives power loss. Use it instead of the manual steps.
+
+What the card does:
+
+- **Power loss:** `overlayroot` keeps `/` in RAM over a read-only root, and `/boot/firmware` is read-only. Everything that must persist lives on the ext4 partition labelled `ptdata`, mounted at `/data`: Docker (`/data/docker`), Bluetooth pairing (`/var/lib/bluetooth`), the journal (`/var/log/journal`) and the server configuration (`/data/ptouch/ptouch.env`). Pairing, updates and configuration changes therefore never need the overlay disabled.
+- **Service:** `ptouch.service` runs the container as described below, reading `/data/ptouch/ptouch.env`. It skips itself until `PTOUCH_BT_ADDRESS` is set.
+- **Logs:** the container logs to the persistent journal, synced every 10 seconds. `ptouch-logs` shows the server log and `ptouch-logs jobs` only its `[Job N]` lines; both accept `journalctl` options such as `-f` or `-b -1`.
+- **Updates:** `sudo ptouch-update` pulls `:edge` and restarts; `sudo ptouch-update sha-<commit>` pins or rolls back.
+
+Build it on macOS with Homebrew OpenSSL and Docker:
+
+1. Download and decompress the 64-bit Raspberry Pi OS Lite (Trixie) image.
+2. Build the arm64 server image and save it: `docker build --platform linux/arm64 -f Dockerfile.deploy -t ghcr.io/pfa230/ptouch-print-server:edge . && docker save ghcr.io/pfa230/ptouch-print-server:edge | gzip -1 > ptouch-image.tar.gz`. First boot loads it, so the card needs no registry pull.
+3. Write a settings file with `WIFI_SSID=`, `WIFI_PSK=`, `WIFI_COUNTRY=`, `LOGIN_PASSWORD=` and optionally `BT_ADDRESS=`, and save the public key that should log in as `pfa`, for example `ssh-add -L | grep <name> > login-key.txt`.
+4. Insert the card, find it with `diskutil list`, and run `sudo deploy/pi/build-card.py diskN raspios.img ptouch-image.tar.gz settings.env login-key.txt`. It refuses any disk that is not a removable SD card, then erases it.
+
+First boot takes about 15 minutes and reboots once into read-only mode. Then log in as `pfa`, pair with the printer switched on, and print:
+
+```sh
+sudo ptouch-pair            # scans for PT-P710BT; or: sudo ptouch-pair XX:XX:XX:XX:XX:XX
+```
+
+The card accepts the password over SSH until you turn it off. Do that only after a key login works, and write it to the read-only root:
+
+```sh
+sudo mount -o remount,rw /media/root-ro
+echo 'PasswordAuthentication no' | sudo tee /media/root-ro/etc/ssh/sshd_config.d/50-cloud-init.conf
+sudo mount -o remount,ro /media/root-ro && sudo reboot
+```
+
+Any other permanent change to the OS goes through `/media/root-ro` the same way, or `sudo raspi-config nonint do_overlayfs 1` followed by a reboot to make the root writable again.
+
 ## 1. Install Docker
 
 ```sh
