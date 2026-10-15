@@ -846,10 +846,13 @@ static void wait_cases(pappl_printer_t *usb, pappl_device_t *d)
     raster_wait_case(usb, CUPS_RASTER_WRITE_PWG, NULL, true);
     raster_wait_case(usb, CUPS_RASTER_WRITE_APPLE, NULL, true);
     /* Submitted margins stay authoritative after the wait and before it. */
-    ipp_t *margins = media_col(NULL, 297, 297);
-    raster_wait_case(usb, CUPS_RASTER_WRITE_PWG, margins, true); ippDelete(margins);
-    margins = media_col(NULL, 0, 0);
-    raster_wait_case(usb, CUPS_RASTER_WRITE_PWG, margins, false); ippDelete(margins);
+    ipp_t *wide = media_col(NULL, 297, 297), *outside = media_col(NULL, 0, 0);
+    const cups_mode_t modes[] = {CUPS_RASTER_WRITE_PWG, CUPS_RASTER_WRITE_APPLE};
+    for (size_t m = 0; m < 2; m++) {
+        raster_wait_case(usb, modes[m], wide, true);
+        raster_wait_case(usb, modes[m], outside, false);
+    }
+    ippDelete(wide); ippDelete(outside);
     /* A PNG that fits 18 mm but not the loaded 12 mm margins passes preflight, waits, then prints. */
     pt_run_set(usb, PT_RUN_CLOSED);
     ipp_t *eighteen = media_col("om_18x50mm_18x50mm", -1, -1);
