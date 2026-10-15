@@ -390,6 +390,7 @@ static void run_model(const char *model, int index)
     assert(papplPrinterSetReadyMedia(p, 1, &original_media));
     truncate_png = true;
     run_image(p, 76, 180, 180, 180, pixels, 3, 0, 1, "none", false, 0);
+    assert(papplJobGetMessage(last_job) && strstr(papplJobGetMessage(last_job), "PNG decode failed"));
     truncate_png = false;
     fail_row = 7;
     run_image(p, 76, 180, 180, 180, pixels, 3, 0, 1, "none", false, 6);

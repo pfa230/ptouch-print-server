@@ -285,9 +285,10 @@ visible through `docker logs`; no debug logfile or separate tail process is
 needed. dbus and Avahi startup failures stop the entrypoint and remain visible.
 The container has no persistent state, so no volume is needed.
 
-If a job reports uncertain output, inspect `docker logs ptouch` and
-`docker exec ptouch ptouch-app jobs -d ptouch` before restarting; job states and
-standard IPP Get-Job-Attributes identify aborted work. Power-cycle the printer,
+If a job reports uncertain output, check the job list on the web interface's
+landing page, `http://<host>:8000/`, before restarting. It shows the 20 most recent
+jobs with each failed job's reason, such as "Write to printer failed; output
+uncertain"; `docker logs ptouch` holds further detail. Power-cycle the printer,
 then run `docker restart ptouch` and check
 `docker exec ptouch ptouch-app status -d ptouch`. Explicitly resubmit the desired
 failed job after recovery. A clean status or USB replug alone does not clear

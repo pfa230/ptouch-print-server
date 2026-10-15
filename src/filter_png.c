@@ -16,7 +16,9 @@
 
 static void png_error_func(png_structp pp, png_const_charp message)
 {
-    papplLogJob((pappl_job_t *)png_get_error_ptr(pp), PAPPL_LOGLEVEL_ERROR, "PNG: %s", message);
+    pappl_job_t *job = png_get_error_ptr(pp);
+    papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "PNG: %s", message);
+    papplJobSetMessage(job, "PNG decode failed: %s", message);
 }
 
 static void png_warning_func(png_structp pp, png_const_charp message)
@@ -257,6 +259,7 @@ bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
     if (width < 1 || width > max_width || height < 1 || height > max_height ||
         (size_t)width * (size_t)height * (size_t)depth > max_size) {
         papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "PNG image is too large to print.");
+        papplJobSetMessage(job, "PNG is too large to print (%dx%d)", width, height);
         papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         goto finish_png;
     }
@@ -271,6 +274,7 @@ bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
     if (xdpi != ydpi) {
         papplLogJob(job, PAPPL_LOGLEVEL_ERROR,
                     "PNG image has non-square aspect ratio - not currently supported.");
+        papplJobSetMessage(job, "PNG has non-square resolution %dx%d dpi", xdpi, ydpi);
         papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         goto finish_png;
     }
