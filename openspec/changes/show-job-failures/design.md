@@ -39,7 +39,8 @@ In `job_cb()`, append `: <message>` to the state/time text when `papplJobGetMess
 
 ### D4: Messages where the application fails
 
-- `pt_dev_write()` takes the job and, on a short or unflushed write, sets "Write to printer failed; output uncertain: power-cycle printer, then restart server". Every write happens while the run state is `PT_RUN_UNCERTAIN`: `r_startpage` sets it before page setup, and only a successful `pt_print_pending()` clears it. So the recovery instruction always applies.
+- Print-output writes are the 13 `pt_dev_write()` calls in `pt_print_pending()`, `r_startpage` and `r_writeline`. When one of them is short or unflushed, it sets "Write to printer failed; output uncertain: power-cycle printer, then restart server". Each runs while the run state is `PT_RUN_UNCERTAIN`: `r_startpage` sets it before page setup, and only a successful `pt_print_pending()` clears it. So the recovery instruction always applies.
+- The status request in `pt_read_live_tape()` is the one other `pt_dev_write()` call. It runs during idle polling with no job, and during the media refresh before any page output, so it never sets the print-output message. Decision (proposal review 1): a failed status-request write gets a distinct message. `pt_live_read` gains a `write_failed` flag, which `pt_read_live_tape()` sets when the request write fails. When that flag is set, `pt_refresh_ready_media()` sets "Status request to printer failed; nothing was printed" instead of "Live tape status is not clean, readable, and supported". Idle polling ignores the flag and keeps its current offline handling.
 - `png_error_func()` sets "PNG decode failed: <libpng message>".
 - The oversize and non-square checks in `filter_png.c` set "PNG is too large to print (<w>x<h>)" and "PNG has non-square resolution <x>x<y> dpi".
 

@@ -41,4 +41,9 @@ A job that fails because a printer write did not complete, or because its PNG ca
 #### Scenario: USB write fails mid-label
 
 - **WHEN** a raster write to the printer does not complete
-- **THEN** the aborted job's message states that the write to the printer failed
+- **THEN** the aborted job's message states that the write to the printer failed and that output is uncertain
+
+#### Scenario: Tape check cannot reach the printer
+
+- **WHEN** the status request sent before a job's first page does not complete
+- **THEN** the aborted job's message states that the status request failed and that nothing was printed

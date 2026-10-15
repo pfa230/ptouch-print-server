@@ -8,7 +8,7 @@
 
 ## 2. Specific failure messages
 
-- [ ] 2.1 Pass the job to `pt_dev_write()` in `src/driver.c` and set the write-failure message (design D4). Verify by injecting a write failure through `fail_opcode` in `tests/test_driver.c` and asserting the message, for both models.
+- [ ] 2.1 In `src/driver.c`, set the print-output write-failure message and the distinct status-request message (design D4). Verify in `tests/test_driver.c`, for both models, by injecting a failure into a raster write and into the media-refresh status request. Assert each aborted job's message, and that the status-request case sent no page output.
 - [ ] 2.2 Set the decode, oversize, and non-square messages in `src/filter_png.c` (design D4). Verify with a truncated-PNG case in `tests/test_png_geometry.c` that asserts "PNG decode failed".
 
 ## 3. Documentation and integration
