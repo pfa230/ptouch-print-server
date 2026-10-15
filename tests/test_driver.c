@@ -18,8 +18,13 @@ static bool pt_media_confirmed(pappl_printer_t *printer)
     return confirmed;
 }
 
-static unsigned char wire[65536], statuses[160];
+static unsigned char wire[65536], statuses[256];
 static size_t wire_used, status_used, status_size, status_chunk = 32;
+/* Reads at these offsets fail, or return nothing for status_gap_reads reads. */
+static size_t status_error_at = SIZE_MAX, status_gap_at = SIZE_MAX;
+static unsigned status_gap_reads;
+/* Job threads read status and append to the wire while tests swap tape. */
+static pthread_mutex_t fixture_lock = PTHREAD_MUTEX_INITIALIZER;
 static int fail_opcode = -1, fail_advanced = -1;
 static bool counting;
 static const pt_dev *selected_model;
@@ -30,6 +35,9 @@ static ssize_t usb_matches = 1;
 static unsigned usb_enumerations, usb_reads;
 static pappl_printer_t *poll_during_job;
 static bool busy_poll_checked;
+/* Cancel this job during the status read that starts at cancel_read_at. */
+static pappl_job_t *cancel_during_read;
+static size_t cancel_read_at;
 
 ssize_t pt_usb_count(uint16_t vid, uint16_t pid)
 { assert(vid == selected_model->vid && pid == selected_model->pid); usb_enumerations++; return usb_present ? usb_matches : 0; }
@@ -50,13 +58,25 @@ bool pt_usb_is_uri(const char *uri) { return pt_usb_model_from_uri(uri) != NULL;
 ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
 {
     (void)d; (void)uri;
+    pthread_mutex_lock(&fixture_lock);
     usb_reads++;
-    size_t n = status_size - status_used;
-    if (n > bytes) n = bytes;
-    if (n > status_chunk) n = status_chunk;
-    memcpy(buffer, statuses + status_used, n);
-    status_used += n;
-    return (ssize_t)n;
+    if (cancel_during_read && status_used == cancel_read_at) {
+        papplJobCancel(cancel_during_read); cancel_during_read = NULL;
+    }
+    ssize_t result = -1;
+    if (status_used == status_gap_at && status_gap_reads) {
+        status_gap_reads--;
+        result = 0;
+    } else if (status_used != status_error_at) {
+        size_t n = status_size - status_used;
+        if (n > bytes) n = bytes;
+        if (n > status_chunk) n = status_chunk;
+        memcpy(buffer, statuses + status_used, n);
+        status_used += n;
+        result = (ssize_t)n;
+    }
+    pthread_mutex_unlock(&fixture_lock);
+    return result;
 }
 static bool dev_open(pappl_device_t *d, const char *uri, const char *name)
 { (void)d; (void)uri; (void)name; return can_open; }
@@ -91,9 +111,11 @@ static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
         }
         return (ssize_t)n;
     }
+    pthread_mutex_lock(&fixture_lock);
     assert(wire_used + n <= sizeof wire);
     memcpy(wire + wire_used, buffer, n);
     wire_used += n;
+    pthread_mutex_unlock(&fixture_lock);
     return (ssize_t)n;
 }
 static pappl_preason_t dev_status(pappl_device_t *d) { (void)d; return PAPPL_PREASON_NONE; }
@@ -122,6 +144,31 @@ static void ready_status(int error, size_t chunk)
         if (i == 2) s[8] = (unsigned char)error;
     }
     status_used = 0; status_size = 96; status_chunk = chunk;
+}
+/* Queue one clean snapshot per tape, optionally followed by one print's ready phases. */
+static void queue_tapes(const int *tapes, size_t n, bool phases)
+{
+    unsigned char ready[96];
+    pthread_mutex_lock(&fixture_lock);
+    ready_status(0, 32); memcpy(ready, statuses, sizeof ready);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char *s = statuses + i * 32;
+        memcpy(s, ready, 32); s[10] = (unsigned char)tapes[i]; s[18] = s[19] = 0;
+    }
+    if (phases) memcpy(statuses + n * 32, ready, sizeof ready);
+    status_size = n * 32 + (phases ? sizeof ready : 0);
+    status_error_at = status_gap_at = SIZE_MAX;
+    pthread_mutex_unlock(&fixture_lock);
+}
+/* Count the status requests that start the wire; *other receives the bytes after them. */
+static size_t status_requests(size_t *other)
+{
+    pthread_mutex_lock(&fixture_lock);
+    size_t n = 0;
+    while ((n + 1) * 3 <= wire_used && !memcmp(wire + n * 3, "\x1b\x69\x53", 3)) n++;
+    *other = wire_used - n * 3;
+    pthread_mutex_unlock(&fixture_lock);
+    return n;
 }
 static int sink_listener;
 static http_t *http;
@@ -159,7 +206,8 @@ static void add_finishing(ipp_t *request, const char *finishing, bool collection
     }
 }
 
-static pappl_job_t *job(pappl_printer_t *p, const char *finishing, int copies, bool collection)
+static pappl_job_t *media_job(pappl_printer_t *p, const char *finishing, int copies,
+                              bool collection, ipp_t *media)
 {
     char resource[128], uri[256];
     snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(p));
@@ -170,6 +218,7 @@ static pappl_job_t *job(pappl_printer_t *p, const char *finishing, int copies, b
     ippAddString(request, IPP_TAG_JOB, IPP_TAG_KEYWORD, "job-hold-until", NULL, "indefinite");
     ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", copies);
     add_finishing(request, finishing, collection);
+    if (media) ippAddCollection(request, IPP_TAG_JOB, "media-col", media);
     ipp_t *response = cupsDoRequest(http, request, resource);
     if (!response || ippGetStatusCode(response) > IPP_STATUS_OK_EVENTS_COMPLETE)
         fprintf(stderr, "Create-Job failed: %s (%s)\n", cupsLastErrorString(), resource);
@@ -178,6 +227,19 @@ static pappl_job_t *job(pappl_printer_t *p, const char *finishing, int copies, b
     ippDelete(response);
     pappl_job_t *j = papplPrinterFindJob(p, id); assert(j);
     return j;
+}
+static pappl_job_t *job(pappl_printer_t *p, const char *finishing, int copies, bool collection)
+{
+    return media_job(p, finishing, copies, collection, NULL);
+}
+/* A named size and margins; omitted members (NULL, -1) are inherited from defaults. */
+static ipp_t *media_col(const char *name, int left, int right)
+{
+    ipp_t *col = ippNew();
+    if (name) ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, "media-size-name", NULL, name);
+    if (left >= 0) ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-left-margin", left);
+    if (right >= 0) ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-right-margin", right);
+    return col;
 }
 static pappl_pr_options_t *begin(pappl_job_t *j, pappl_device_t *d)
 {
@@ -322,11 +384,11 @@ static void *socket_sink(void *arg)
 
 /* Real IPP upload, Release-Job scheduling, PNG filter, and TCP device output.
  * Only media/status are fixed; every printing callback is the production one. */
-static pappl_job_t *upload_png(pappl_printer_t *p, const char *finishing, int copies,
-                               bool collection)
+static pappl_job_t *upload_image(pappl_printer_t *p, const char *finishing, int copies,
+                                 bool collection, ipp_t *media, int width, int black_a, int black_b)
 {
     bool malformed = finishing && !strcmp(finishing, "malformed");
-    pappl_job_t *j = job(p, finishing, copies, collection);
+    pappl_job_t *j = media_job(p, finishing, copies, collection, media);
     char filename[] = "/tmp/ptouch-finishing-png-XXXXXX";
     int fd = mkstemp(filename); assert(fd >= 0);
     FILE *file = fdopen(fd, "wb"); assert(file);
@@ -334,11 +396,12 @@ static pappl_job_t *upload_png(pappl_printer_t *p, const char *finishing, int co
     png_infop info = png_create_info_struct(png); assert(png && info);
     assert(!setjmp(png_jmpbuf(png)));
     png_init_io(png, file);
-    png_set_IHDR(png, info, 85, 180, 8, PNG_COLOR_TYPE_GRAY, PNG_INTERLACE_NONE,
+    png_set_IHDR(png, info, (png_uint_32)width, 180, 8, PNG_COLOR_TYPE_GRAY, PNG_INTERLACE_NONE,
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
     png_write_info(png, info);
-    unsigned char pixels[85]; memset(pixels, 255, sizeof pixels);
-    pixels[40] = pixels[41] = 0;
+    unsigned char pixels[128]; assert(width <= (int)sizeof pixels);
+    memset(pixels, 255, sizeof pixels);
+    pixels[black_a] = pixels[black_b] = 0;
     for (int i = 0; i < 180; i++) png_write_row(png, pixels);
     png_write_end(png, info); png_destroy_write_struct(&png, &info); fclose(file);
     if (malformed) {
@@ -360,6 +423,12 @@ static pappl_job_t *upload_png(pappl_printer_t *p, const char *finishing, int co
     return j;
 }
 
+static pappl_job_t *upload_png(pappl_printer_t *p, const char *finishing, int copies,
+                               bool collection)
+{
+    return upload_image(p, finishing, copies, collection, NULL, 85, 40, 41);
+}
+
 static void png_socket_case(pappl_printer_t *p, const char *finishing, int copies,
                             bool collection, int inits, int ffs, int ejects)
 {
@@ -376,12 +445,12 @@ static void png_socket_case(pappl_printer_t *p, const char *finishing, int copie
     expect_wire(inits, malformed ? 0 : 180 * copies, ffs, ejects);
 }
 
-static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
-                                bool collection, int pages, int copies, int bits, cups_mode_t mode,
-                                int damage)
+static const unsigned raster_lengths[] = {180, 360, 90};
+
+/* 12 mm pages; damage 1 appends a stray byte, 2 truncates the last row. */
+static void write_raster(char *path, int pages, int bits, cups_mode_t mode, int damage)
 {
-    const unsigned lengths[] = {180, 360, 90};
-    char path[] = "/tmp/ptouch-batch-raster-XXXXXX";
+    const unsigned *lengths = raster_lengths;
     int fd = mkstemp(path); assert(fd >= 0);
     cups_raster_t *raster = cupsRasterOpen(fd, mode); assert(raster);
     for (int i = 0; i < pages; i++) {
@@ -408,6 +477,15 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
         assert(!ftruncate(fd, size - 3));
     }
     close(fd);
+}
+
+static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
+                                bool collection, int pages, int copies, int bits, cups_mode_t mode,
+                                int damage)
+{
+    const unsigned *lengths = raster_lengths;
+    char path[] = "/tmp/ptouch-batch-raster-XXXXXX";
+    write_raster(path, pages, bits, mode, damage);
     char resource[128], uri[256];
     snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
     snprintf(uri, sizeof uri, "ipp://localhost:%d%s", port, resource);
@@ -633,6 +711,176 @@ static void reject_unsupported_finishing(pappl_printer_t *p)
     ipp_t *response = cupsDoRequest(http, request, resource);
     assert(response && ippGetStatusCode(response) == IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES);
     ippDelete(response);
+}
+
+/* Tape width of the last print-information command on the wire. */
+static int printed_tape(void)
+{
+    int tape = 0;
+    for (size_t pos = 0; pos < wire_used; pos += command_size(pos))
+        if (wire[pos] == 27 && wire[pos + 1] == 'i' && (wire[pos + 2] == 'c' || wire[pos + 2] == 'z'))
+            tape = wire[pos + 5];
+    return tape;
+}
+
+static void await_terminal(pappl_job_t *j)
+{
+    for (int i = 0; i < 2000 && papplJobGetState(j) < IPP_JSTATE_CANCELED; i++) {
+        struct timespec delay = {0, 10000000L}; nanosleep(&delay, NULL);
+    }
+}
+
+/* Once a job reports media-needed having sent only status requests (and, when
+ * `job` is set, the expected message), load `tape`, or cancel the job when 0. */
+typedef struct { pappl_printer_t *printer; pappl_job_t *job; const char *message; int tape; bool acted; } tape_wait;
+static bool job_waits(const tape_wait *w)
+{
+    const char *message = w->job ? papplJobGetMessage(w->job) : NULL;
+    return (papplPrinterGetReasons(w->printer) & PAPPL_PREASON_MEDIA_NEEDED) &&
+           (!w->job || (message && !strcmp(message, w->message)));
+}
+static void *act_on_wait(void *arg)
+{
+    tape_wait *w = arg;
+    for (int i = 0; i < 1000 && !job_waits(w); i++) {
+        struct timespec delay = {0, 10000000L}; nanosleep(&delay, NULL);
+    }
+    size_t other;
+    w->acted = job_waits(w) && status_requests(&other) && !other;
+    if (w->acted && w->tape) queue_tapes(&w->tape, 1, true);
+    else if (w->acted) papplJobCancel(w->job);
+    return NULL;
+}
+
+/* A 12 mm raster page submitted while 18 mm tape is loaded, without explicit size. */
+static void raster_wait_case(pappl_printer_t *usb, cups_mode_t mode, ipp_t *media, bool fits)
+{
+    char path[] = "/tmp/ptouch-wait-raster-XXXXXX";
+    write_raster(path, 1, mode == CUPS_RASTER_WRITE_APPLE ? 8 : 1, mode, 0);
+    const int loaded[] = {18, 18}; queue_tapes(loaded, 2, false);
+    pt_run_set(usb, PT_RUN_CLOSED); reset_wire();
+    assert(!(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    tape_wait w = {usb, NULL, NULL, 12, false};
+    pthread_t swapper;
+    if (fits) assert(!pthread_create(&swapper, NULL, act_on_wait, &w));
+    ipp_t *request = printer_request(usb, IPP_OP_PRINT_JOB);
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL,
+                 mode == CUPS_RASTER_WRITE_APPLE ? "image/urf" : "image/pwg-raster");
+    if (media) ippAddCollection(request, IPP_TAG_JOB, "media-col", media);
+    char resource[128]; snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(usb));
+    ipp_t *reply = cupsDoFileRequest(http, request, resource, path); unlink(path);
+    assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
+    pappl_job_t *j = papplPrinterFindJob(usb, ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0));
+    ippDelete(reply); assert(j); await_terminal(j);
+    if (fits) {
+        pthread_join(swapper, NULL);
+        if (papplJobGetState(j) != IPP_JSTATE_COMPLETED)
+            fprintf(stderr, "Raster wait mode%d: state%d message %s\n", mode, papplJobGetState(j), papplJobGetMessage(j));
+        assert(w.acted && papplJobGetState(j) == IPP_JSTATE_COMPLETED && printed_tape() == 12);
+        expect_policy(1, raster_lengths, PT_CUT_EACH);
+    } else {
+        size_t other;
+        assert(papplJobGetState(j) == IPP_JSTATE_ABORTED && status_requests(&other) == 1 && !other);
+        assert(!strcmp(papplJobGetMessage(j), "Selected margins extend beyond the physical printable window"));
+        assert(!(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    }
+}
+
+/* Wrong-width first labels wait for matching tape, sending only status requests. */
+static void wait_cases(pappl_printer_t *usb, pappl_device_t *d)
+{
+    pappl_pr_driver_data_t before; papplPrinterGetDriverData(usb, &before);
+    pappl_media_col_t media18; assert(media_col_for(18, 10000, 180, &media18));
+    pt_geometry g18; assert(pt_tape_geometry(18, &g18));
+    ipp_t *twelve = media_col("om_12x50mm_12x50mm", -1, -1);
+    size_t other;
+    /* A 12 mm page inherits 18 mm margins, waits through an empty read, then prints. */
+    pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    const int swapped[] = {18, 18, 12}; queue_tapes(swapped, 3, false);
+    status_gap_at = 64; status_gap_reads = PT_STATUS_POLL_TRIES;
+    pappl_job_t *j = media_job(usb, "none", 1, false, twelve);
+    pappl_pr_options_t *o = begin(j, d);
+    assert(o->header.cupsWidth == 85 && o->media.left_margin == g18.left_margin_centimm &&
+           o->media.right_margin == g18.right_margin_centimm);
+    assert(r_startpage(j, o, d, 0) && status_used == 96);
+    assert(status_requests(&other) == 4 && other && printed_tape() == 12);
+    pappl_pr_driver_data_t dd; papplPrinterGetDriverData(usb, &dd);
+    assert(dd.media_ready[0].size_width == 1200);
+    assert(!(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    papplJobCancel(j); end(j, o, d);
+    /* Cancellation ends the wait without print commands. */
+    pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    const int stuck[] = {18, 18}; queue_tapes(stuck, 2, false);
+    j = media_job(usb, "none", 1, false, twelve); o = begin(j, d);
+    tape_wait w = {usb, j, "Waiting for 12 mm tape; 18 mm loaded", 0, false};
+    pthread_t canceler; assert(!pthread_create(&canceler, NULL, act_on_wait, &w));
+    assert(!r_startpage(j, o, d, 0)); pthread_join(canceler, NULL);
+    assert(w.acted && papplJobIsCanceled(j) && status_requests(&other) >= 2 && !other);
+    assert(pt_run_get(usb) == PT_RUN_CLOSED && !(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    end(j, o, d);
+    /* Cancellation during a read that reports the wanted tape still sends no print commands. */
+    assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    const int matching[] = {18, 12}; queue_tapes(matching, 2, false);
+    j = media_job(usb, "none", 1, false, twelve); o = begin(j, d);
+    cancel_during_read = j; cancel_read_at = 32;
+    assert(!r_startpage(j, o, d, 0) && !cancel_during_read && papplJobIsCanceled(j));
+    assert(status_requests(&other) == 2 && !other && status_used == 64);
+    assert(pt_run_get(usb) == PT_RUN_CLOSED && !(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    end(j, o, d);
+    /* A status I/O error aborts the wait with a specific message. */
+    assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    queue_tapes(stuck, 1, false); status_error_at = 32;
+    j = media_job(usb, "none", 1, false, twelve); o = begin(j, d);
+    assert(!r_startpage(j, o, d, 0) && status_requests(&other) == 2 && !other);
+    assert(!strcmp(papplJobGetMessage(j), "Cannot read loaded tape while waiting for 12 mm tape"));
+    end(j, o, d); ippDelete(twelve);
+    /* A later label for another width fails without waiting. */
+    pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
+    queue_tapes(stuck, 1, false); j = job(usb, "none", 1, false); o = begin(j, d); assert(page_test(j, o, d));
+    size_t first_label = wire_used;
+    o->header.cupsWidth = 85; o->media.size_width = 1200;
+    assert(!r_startpage(j, o, d, 1) && wire_used == first_label && status_used == 32);
+    assert(!strcmp(papplJobGetMessage(j), "Page geometry does not match loaded 18 mm tape at 180 dpi"));
+    end(j, o, d);
+    /* IPP raster and URF pages without explicit media wait, then print on 12 mm. */
+    raster_wait_case(usb, CUPS_RASTER_WRITE_PWG, NULL, true);
+    raster_wait_case(usb, CUPS_RASTER_WRITE_APPLE, NULL, true);
+    /* Submitted margins stay authoritative after the wait and before it. */
+    ipp_t *wide = media_col(NULL, 297, 297), *outside = media_col(NULL, 0, 0);
+    const cups_mode_t modes[] = {CUPS_RASTER_WRITE_PWG, CUPS_RASTER_WRITE_APPLE};
+    for (size_t m = 0; m < 2; m++) {
+        raster_wait_case(usb, modes[m], wide, true);
+        raster_wait_case(usb, modes[m], outside, false);
+    }
+    ippDelete(wide); ippDelete(outside);
+    /* A PNG that fits 18 mm but not the loaded 12 mm margins passes preflight, waits, then prints. */
+    pt_run_set(usb, PT_RUN_CLOSED);
+    ipp_t *eighteen = media_col("om_18x50mm_18x50mm", -1, -1);
+    j = upload_image(usb, "none", 1, false, eighteen, 120, 0, 119); ippDelete(eighteen);
+    const int loaded12[] = {12, 12, 12}; queue_tapes(loaded12, 3, false);
+    reset_wire(); assert(papplJobRelease(j, "test"));
+    w = (tape_wait){usb, j, "Waiting for 18 mm tape; 12 mm loaded", 18, false};
+    act_on_wait(&w); assert(w.acted); await_terminal(j);
+    if (papplJobGetState(j) != IPP_JSTATE_COMPLETED)
+        fprintf(stderr, "PNG wait: state%d message %s\n", papplJobGetState(j), papplJobGetMessage(j));
+    assert(papplJobGetState(j) == IPP_JSTATE_COMPLETED && printed_tape() == 18);
+    const unsigned png_length[] = {354}; expect_policy(1, png_length, PT_CUT_NONE);
+    bool dots[128] = {false};
+    for (size_t pos = 0; pos < wire_used; pos += command_size(pos)) {
+        if (wire[pos] != 'G') continue;
+        const unsigned char *head = wire + pos + (selected_model->pid == 0x20af ? 4 : 3);
+        for (unsigned x = 0; x < 128; x++) if (head[15 - x / 8] & (1u << (x % 8))) dots[x] = true;
+    }
+    for (unsigned x = 0; x < 128; x++) assert(dots[x] == (x == 4 || x == 123));
+    /* Explicit margins leaving fewer than 120 dots still fail in preflight without waiting. */
+    pt_run_set(usb, PT_RUN_CLOSED);
+    ipp_t *narrow = media_col("om_18x50mm_18x50mm", g18.left_margin_centimm, 200);
+    j = upload_image(usb, "none", 1, false, narrow, 120, 0, 119); ippDelete(narrow);
+    queue_tapes(loaded12, 1, false); reset_wire(); assert(papplJobRelease(j, "test")); await_terminal(j);
+    assert(papplJobGetState(j) == IPP_JSTATE_ABORTED && status_requests(&other) == 1 && !other);
+    assert(strstr(papplJobGetMessage(j), "printable width is 110"));
+    assert(!(papplPrinterGetReasons(usb) & PAPPL_PREASON_MEDIA_NEEDED));
+    pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, before.media_ready));
 }
 
 int main(int argc, char **argv)
@@ -949,6 +1197,7 @@ int main(int argc, char **argv)
     end(blocked, blocked_options, d);
     /* A fresh server/fixture state after the operator's power-cycle. */
     pt_run_set(usb, PT_RUN_CLOSED);
+    wait_cases(usb, d);
     /* A failed status request names its cause and sends no page output. */
     reset_wire(); fail_opcode = 27;
     pappl_job_t *unsent = job(usb, "none", 1, false);

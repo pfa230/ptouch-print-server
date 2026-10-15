@@ -312,6 +312,8 @@ bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
 
     if (!explicit_length)
         pt_set_page_length(storage->options, length_centimm);
+    /* Preflight and PAPPL's placement read margins before the driver can wait. */
+    pt_resolve_page_margins(job, storage->options);
     papplLogJob(job, PAPPL_LOGLEVEL_INFO,
                 "%s image, %d px along the tape at %d dpi -> media length %d (1/100 mm), "
                 "header.cupsHeight=%u PWG_ImageBox=[%u %u %u %u]",
