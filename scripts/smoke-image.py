@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import queue
+import re
 import socket
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 import zlib
 
@@ -221,7 +223,8 @@ def main():
             "-e", f"PTOUCH_MODEL={args.model}", args.image)
         mapping = json.loads(run("docker", "inspect", "--format",
                                  "{{json .NetworkSettings.Ports}}", name))
-        url = f"ipp://127.0.0.1:{mapping['8000/tcp'][0]['HostPort']}/ipp/print/ptouch"
+        port = mapping['8000/tcp'][0]['HostPort']
+        url = f"ipp://127.0.0.1:{port}/ipp/print/ptouch"
         with tempfile.TemporaryDirectory(prefix="ptouch-smoke-") as temp:
             directory = Path(temp)
             image = directory / "label.png"
@@ -295,9 +298,15 @@ def main():
             assert sink.take() == b"", "Wrong-tape image emitted printer commands"
             malformed = directory / "malformed.png"
             malformed.write_bytes(b"\x89PNG\r\n\x1a\n")
-            print(submit(url, directory, malformed, state=8))
+            output = submit(url, directory, malformed, state=8)
+            print(output)
             wire = sink.take()
             assert wire == b"", "Malformed PNG emitted printer commands"
+            # The landing page lists the failed job with its reason.
+            job_id = re.search(r"job-id \(integer\) = (\d+)", output).group(1)
+            home = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).read().decode()
+            row = re.search(rf"<tr><td>{job_id}</td>.*?</tr>", home, re.S)
+            assert row and "PNG decode failed: " in row.group(0), row
             print(submit(url, directory, image, "ATTR enum finishings 60"))
             commands = decode(sink.take(), args.model)
             check_geometry(commands, 1)

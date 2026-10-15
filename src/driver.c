@@ -57,6 +57,15 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
     return accepted == (ssize_t)n && after.write_bytes - before.write_bytes == n;
 }
 
+/* Print output runs while the run state is uncertain, so a failed write leaves
+ * the printer in an unknown state. */
+static bool pt_job_write(pappl_job_t *job, pappl_device_t *device, const uint8_t *buf, size_t n)
+{
+    if (pt_dev_write(device, buf, n)) return true;
+    papplJobSetMessage(job, "Write to printer failed; output uncertain: power-cycle printer, then restart server");
+    return false;
+}
+
 /* The device may not have the 32-byte status reply ready on the first read, so
  * poll a few times with a short delay, mirroring upstream ptouch_getstatus. Each
  * read is itself bounded (300 ms) so the loop cannot hang: ~4 s worst case. */
@@ -64,8 +73,9 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
 #define PT_STATUS_POLL_NS    100000000L   /* 0.1 s */
 
 /* One live status read. `st` is meaningful only when `parsed`; `n` is the raw
- * read result, which separates an I/O error (< 0) from no answer at all (0). */
-typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
+ * read result, which separates an I/O error (< 0) from no answer at all (0).
+ * `write_failed` means the status request itself was not sent. */
+typedef struct { ssize_t n; bool parsed; bool write_failed; pt_status st; } pt_live_read;
 
 /* Read the live tape from an already-open device: ESC i S, then poll for
  * the reply. The caller owns the device and interprets the result; a supported
@@ -81,6 +91,7 @@ static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
     }
     if (!pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
         r.n = -1;
+        r.write_failed = true;
         return r;
     }
 
@@ -333,9 +344,9 @@ static bool pt_print_pending(pappl_job_t *job, pappl_device_t *device, bool fina
     uint8_t command[8];
     bool cut = final && batch->policy.cut_at_end;
     if (papplJobIsCanceled(job)) return false;
-    if (cut && !pt_dev_write(device, command, pt_cmd_setadvanced(command, 8))) return false;
+    if (cut && !pt_job_write(job, device, command, pt_cmd_setadvanced(command, 8))) return false;
     if (papplJobIsCanceled(job)) return false;
-    if (!pt_dev_write(device, command, cut ? pt_cmd_eject(command) : pt_cmd_ff(command)) ||
+    if (!pt_job_write(job, device, command, cut ? pt_cmd_eject(command) : pt_cmd_ff(command)) ||
         !pt_wait_ready(job, device)) return false;
     batch->pending = false;
     pt_run_set(papplJobGetPrinter(job), cut ? PT_RUN_CLOSED : PT_RUN_OPEN);
@@ -392,19 +403,19 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     bool p710bt = model->pid == 0x20af;
     uint8_t buf[100];
     if (b->first_label &&
-        ((!continuation && p710bt && !pt_dev_write(d, buf, pt_cmd_invalidate(buf))) ||
-         (!continuation && !pt_dev_write(d, buf, pt_cmd_init(buf))) ||
-         !pt_dev_write(d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
-         (p710bt && !pt_dev_write(d, buf, pt_cmd_auto_status(buf, true)))))
+        ((!continuation && p710bt && !pt_job_write(j, d, buf, pt_cmd_invalidate(buf))) ||
+         (!continuation && !pt_job_write(j, d, buf, pt_cmd_init(buf))) ||
+         !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
+         (p710bt && !pt_job_write(j, d, buf, pt_cmd_auto_status(buf, true)))))
         return pt_fail_job(j);
     size_t info_len = p710bt ? pt_cmd_printinfo_extended(buf, b->tape_mm,
                              o->header.cupsHeight, b->first_label && !continuation ? 0 : 1) :
                              pt_cmd_printinfo(buf, b->tape_mm);
-    if (!pt_dev_write(d, buf, info_len) ||
-        !pt_dev_write(d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
-        !pt_dev_write(d, buf, pt_cmd_setadvanced(buf, 0)) ||
-        (p710bt && (!pt_dev_write(d, buf, pt_cmd_margin(buf, 14)) ||
-                   !pt_dev_write(d, buf, pt_cmd_compression(buf, 2)))))
+    if (!pt_job_write(j, d, buf, info_len) ||
+        !pt_job_write(j, d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
+        !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)) ||
+        (p710bt && (!pt_job_write(j, d, buf, pt_cmd_margin(buf, 14)) ||
+                   !pt_job_write(j, d, buf, pt_cmd_compression(buf, 2)))))
         return pt_fail_job(j);
     b->first_label = false;
     b->page_active = true;
@@ -427,7 +438,7 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
                     pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
                     pt_cmd_sendraster(buf, packed, sizeof packed);
-    return pt_dev_write(d, buf, length) || pt_fail_job(j);
+    return pt_job_write(j, d, buf, length) || pt_fail_job(j);
 }
 
 /* Wait for receive-ready, not just print-completed. This is USB flow control,
@@ -667,15 +678,19 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
     if (!pt_usb_is_uri(uri)) return true;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
+    pt_live_read live;
     do {
-        pt_live_read live = pt_read_live_tape(device, uri);
+        live = pt_read_live_tape(device, uri);
         if (pt_publish_tape(printer, live)) return true;
         if (live.parsed || live.n != 0 || papplJobIsCanceled(job)) break;
         struct timespec delay = {0, PT_MEDIA_RETRY_NS};
         nanosleep(&delay, NULL);
     } while (pt_ms_since(&start) < PT_MEDIA_REFRESH_MS);
     papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
-    papplJobSetMessage(job, "Live tape status is not clean, readable, and supported");
+    if (live.write_failed)
+        papplJobSetMessage(job, "Status request to printer failed; nothing was printed");
+    else
+        papplJobSetMessage(job, "Live tape status is not clean, readable, and supported");
     return false;
 }
 

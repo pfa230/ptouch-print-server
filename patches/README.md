@@ -107,6 +107,26 @@ driver. Remove this patch only when a pinned upstream version passes the same
 IPP/default/state and conventional CUPS regressions without it; a dependency
 upgrade must revalidate both patches and their exact application.
 
+## PAPPL job history and failure reasons
+
+Both image builds apply `pappl-1.4.11-job-history.patch` after the finishing
+patch, with the same strict patch flags. It changes only `pappl/printer-webif.c`.
+In multi-queue mode the stock landing page `/` shows each printer's status card
+and active-job count but no jobs, and no page renders a job's
+`job-state-message`. A failed job therefore appeared only as "Aborted <time>",
+and its reason was reachable only through IPP Get-Job-Attributes.
+
+The patch lists the printer's 20 most recent jobs on `/`, newest first, through
+the existing job row callback, so `/`, the printer page, and its Jobs page share
+one row format. That callback appends the job's `job-state-message` to the
+status cell, or, for an aborted or canceled job without one, its
+`job-state-reasons` keywords. Text is HTML-escaped by the existing client
+printer. No IPP behavior, public API, or ABI changes. The deploy-image smoke
+checks that its malformed-PNG job's row on `/` shows the decode failure.
+
+Remove this patch when a pinned upstream release lists jobs on the multi-queue
+landing page and renders `job-state-message`.
+
 ## Verification
 
 `test_pappl_raster` submits real IPP jobs to a minimal PAPPL driver and captures
