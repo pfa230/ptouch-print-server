@@ -12,6 +12,11 @@
  * configured media. Uncertain output blocks every transport until recovery. */
 bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device);
 
+/* Find the supported tape whose geometry matches the page and replace margins
+ * the job's media-col did not submit with that tape's published margins.
+ * Returns the tape width in mm, or 0 when no supported tape matches. */
+int pt_resolve_page_margins(pappl_job_t *job, pappl_pr_options_t *options);
+
 /* Fill driver_data for a P-touch printer (PAPPL pappl_pr_driver_cb_t). */
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name,
                   const char *device_uri, const char *device_id,

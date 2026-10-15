@@ -359,17 +359,85 @@ static bool pt_page_width_matches(const pappl_pr_options_t *o, const pt_geometry
            o->header.cupsWidth >= (unsigned)g->right_px;
 }
 
+/* True when the job's media-col names this margin; omitted margins are inherited. */
+static bool pt_submitted_margin(pappl_job_t *job, const char *name)
+{
+    ipp_attribute_t *col = papplJobGetAttribute(job, "media-col");
+    return col && ippGetValueTag(col) == IPP_TAG_BEGIN_COLLECTION &&
+           ippFindAttribute(ippGetCollection(col, 0), name, IPP_TAG_INTEGER);
+}
+
+int pt_resolve_page_margins(pappl_job_t *job, pappl_pr_options_t *o)
+{
+    pt_geometry g;
+    for (size_t i = 0; i < sizeof pt_tape_mm / sizeof pt_tape_mm[0]; i++) {
+        if (!pt_tape_geometry(pt_tape_mm[i], &g) || !pt_page_width_matches(o, &g, pt_tape_mm[i]))
+            continue;
+        if (!pt_submitted_margin(job, "media-left-margin"))
+            o->media.left_margin = g.left_margin_centimm;
+        if (!pt_submitted_margin(job, "media-right-margin"))
+            o->media.right_margin = g.right_margin_centimm;
+        o->header.cupsInteger[CUPS_RASTER_PWG_ImageBoxLeft] =
+            (unsigned)o->media.left_margin * o->header.HWResolution[0] / 2540;
+        o->header.cupsInteger[CUPS_RASTER_PWG_ImageBoxRight] = o->header.cupsWidth -
+            (unsigned)o->media.right_margin * o->header.HWResolution[0] / 2540 - 1;
+        return pt_tape_mm[i];
+    }
+    return 0;
+}
+
+static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live);
+
+/* The first label holds the device until the loaded tape matches. Only status
+ * requests reach the printer; faults and missing replies are part of a swap. */
+#define PT_TAPE_WAIT_S 2
+
+static bool pt_wait_for_tape(pappl_job_t *j, pappl_device_t *d, int wanted)
+{
+    pt_batch *b = papplJobGetData(j);
+    pappl_printer_t *printer = papplJobGetPrinter(j);
+    const char *uri = papplPrinterGetDeviceURI(printer);
+    int loaded = b->tape_mm;
+    papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Waiting for %d mm tape; %d mm loaded", wanted, loaded);
+    while (!papplJobIsCanceled(j)) {
+        pt_live_read live = pt_read_live_tape(d, uri);
+        if (live.n < 0) {
+            papplJobSetMessage(j, "Cannot read loaded tape while waiting for %d mm tape", wanted);
+            papplLogJob(j, PAPPL_LOGLEVEL_ERROR, "%s", papplJobGetMessage(j));
+            break;
+        }
+        if (pt_publish_tape(printer, live) && live.st.tape_mm == wanted) {
+            b->tape_mm = (uint8_t)wanted;
+            papplJobSetMessage(j, "Loaded tape matches %d mm", wanted);
+            papplLogJob(j, PAPPL_LOGLEVEL_INFO, "%s", papplJobGetMessage(j));
+            return true;
+        }
+        if (live.parsed) loaded = live.st.tape_mm;
+        papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_NEEDED, PAPPL_PREASON_NONE);
+        if (loaded) papplJobSetMessage(j, "Waiting for %d mm tape; %d mm loaded", wanted, loaded);
+        else papplJobSetMessage(j, "Waiting for %d mm tape; no tape loaded", wanted);
+        struct timespec delay = {PT_TAPE_WAIT_S, 0};
+        nanosleep(&delay, NULL);
+    }
+    papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_MEDIA_NEEDED);
+    papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Stopped waiting for %d mm tape", wanted);
+    return false;
+}
+
 static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 {
     (void)p;
     pt_batch *b = papplJobGetData(j);
     if (!b || b->failed || b->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
+    int tape_mm = 0;
+    if (o->header.HWResolution[0] == 180 && o->header.HWResolution[1] == 180 &&
+        o->header.cupsBitsPerPixel == 1 &&
+        o->header.cupsHeight >= PT_ROLL_MIN_CENTIMM * 180 / 2540 &&
+        o->header.cupsHeight <= PT_ROLL_MAX_CENTIMM * 180 / 2540)
+        tape_mm = pt_resolve_page_margins(j, o);
+    /* A swap after the first label would end the run with labels already printed. */
     pt_geometry g;
-    if (!pt_tape_geometry(b->tape_mm, &g) || o->header.HWResolution[0] != 180 ||
-        o->header.HWResolution[1] != 180 || o->header.cupsBitsPerPixel != 1 ||
-        !pt_page_width_matches(o, &g, b->tape_mm) ||
-        o->header.cupsHeight < PT_ROLL_MIN_CENTIMM * 180 / 2540 ||
-        o->header.cupsHeight > PT_ROLL_MAX_CENTIMM * 180 / 2540) {
+    if (!tape_mm || (tape_mm != b->tape_mm && !b->first_label) || !pt_tape_geometry(tape_mm, &g)) {
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         papplJobSetMessage(j, "Page geometry does not match loaded %d mm tape at 180 dpi", b->tape_mm);
         return pt_fail_job(j);
@@ -385,6 +453,7 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
      * default header. Keep a healthy preceding run if validation rejected it. */
     pt_run run = pt_run_get(printer);
     if (run == PT_RUN_UNCERTAIN && b->first_label) return pt_fail_job(j);
+    if (tape_mm != b->tape_mm && !pt_wait_for_tape(j, d, tape_mm)) return pt_fail_job(j);
     if (b->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
     bool continuation = pt_chain_get(printer);
     pt_run_set(printer, PT_RUN_UNCERTAIN);
