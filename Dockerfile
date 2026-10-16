@@ -5,7 +5,7 @@ FROM debian:bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config git ca-certificates \
       autoconf automake libtool gettext autopoint \
-      libusb-1.0-0-dev libgd-dev libpng-dev libjpeg-dev zlib1g-dev \
+      libusb-1.0-0-dev libbluetooth-dev libgd-dev libpng-dev libjpeg-dev zlib1g-dev \
       libcups2-dev libcupsimage2-dev cups-ipp-utils usbutils \
       libssl-dev libavahi-client-dev libgnutls28-dev libkrb5-dev \
       python3 python3-pil \

@@ -32,7 +32,8 @@ static char selected_id[128], selected_uri[128];
 static struct { size_t rows, ff, eject, modes, cuts, final, infos, inits; } counts;
 static bool usb_present = true, can_open = true;
 static ssize_t usb_matches = 1;
-static unsigned usb_enumerations, usb_reads;
+static unsigned usb_enumerations, usb_reads, bt_reads, opens;
+static bool bt_eof;
 static pappl_printer_t *poll_during_job;
 static bool busy_poll_checked;
 /* Cancel this job during the status read that starts at cancel_read_at. */
@@ -55,11 +56,10 @@ const pt_dev *pt_usb_model_from_uri(const char *uri)
     return NULL;
 }
 bool pt_usb_is_uri(const char *uri) { return pt_usb_model_from_uri(uri) != NULL; }
-ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
+static ssize_t feed_status(unsigned *reads, void *buffer, size_t bytes)
 {
-    (void)d; (void)uri;
     pthread_mutex_lock(&fixture_lock);
-    usb_reads++;
+    (*reads)++;
     if (cancel_during_read && status_used == cancel_read_at) {
         papplJobCancel(cancel_during_read); cancel_during_read = NULL;
     }
@@ -78,8 +78,14 @@ ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, siz
     pthread_mutex_unlock(&fixture_lock);
     return result;
 }
+ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
+{ (void)d; (void)uri; return feed_status(&usb_reads, buffer, bytes); }
+bool pt_bt_is_uri(const char *uri)
+{ return uri && !strcmp(uri, "ptouch-bt://Brother/PT-P710BT/A4:C1:38:AB:CD:EF"); }
+ssize_t pt_bt_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
+{ (void)d; assert(pt_bt_is_uri(uri)); if (bt_eof) { bt_reads++; return -1; } return feed_status(&bt_reads, buffer, bytes); }
 static bool dev_open(pappl_device_t *d, const char *uri, const char *name)
-{ (void)d; (void)uri; (void)name; return can_open; }
+{ (void)d; (void)uri; (void)name; opens++; return can_open; }
 static void dev_close(pappl_device_t *d) { (void)d; }
 static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
 {
@@ -713,6 +719,113 @@ static void reject_unsupported_finishing(pappl_printer_t *p)
     ippDelete(response);
 }
 
+/* Two labels with deferred finalization; returns the complete wire. */
+static size_t transport_batch(pappl_printer_t *printer, const char *finishing, pappl_device_t *d,
+                              unsigned char *out)
+{
+    pt_run_set(printer, PT_RUN_CLOSED); reset_wire();
+    ready_status(0, 7); statuses[18] = statuses[19] = 0; status_size = 32;
+    pappl_job_t *j = job(printer, finishing, 1, !strcmp(finishing, "ptouch-chain"));
+    pappl_pr_options_t *o = begin(j, d);
+    assert(page_test(j, o, d));
+    ready_status(0, 7); assert(page_test(j, o, d));
+    ready_status(0, 7); end(j, o, d);
+    memcpy(out, wire, wire_used);
+    return wire_used;
+}
+
+static void clean_snapshot(void)
+{
+    ready_status(0, 32); statuses[18] = statuses[19] = 0; status_size = 32;
+}
+
+/* Bluetooth: identical driver bytes, its own status path, and no USB access. */
+static void bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_device_t *d)
+{
+    const char *bt_uri = "ptouch-bt://Brother/PT-P710BT/A4:C1:38:AB:CD:EF";
+    pappl_pr_driver_data_t rejected = {0}; ipp_t *attrs = NULL;
+    assert(!pt_driver_cb(sys, "brother_ptouch", "ptouch-bt://Brother/PT-P710BT/zz",
+                         selected_id, &rejected, &attrs, NULL) && !rejected.extension);
+    pappl_printer_t *bt = papplPrinterCreate(sys, 0, "bt", "brother_ptouch", selected_id, bt_uri);
+    assert(bt);
+    unsigned enumerations = usb_enumerations, reads = usb_reads;
+
+    clean_snapshot(); reset_wire(); unsigned before = bt_reads;
+    assert(status_cb(bt) && pt_media_confirmed(bt) && bt_reads > before);
+    assert(wire_used == 3 && !memcmp(wire, "\x1b\x69\x53", 3));
+    can_open = false; assert(status_cb(bt)); can_open = true;
+    assert(!pt_media_confirmed(bt) && (papplPrinterGetReasons(bt) & PAPPL_PREASON_OFFLINE));
+
+    /* Each policy yields distinct bytes, identical on both transports. */
+    static unsigned char usb_wire[sizeof wire], bt_wire[4][sizeof wire];
+    size_t bt_sizes[4];
+    const char *finishings[] = {"none", "trim", "trim-after-job", "ptouch-chain"};
+    for (unsigned i = 0; i < 4; i++) {
+        unsigned saved_usb = usb_enumerations, saved_reads = usb_reads;
+        size_t usb_size = transport_batch(usb, finishings[i], d, usb_wire);
+        usb_enumerations = saved_usb; usb_reads = saved_reads;
+        bt_sizes[i] = transport_batch(bt, finishings[i], d, bt_wire[i]);
+        assert(usb_size == bt_sizes[i] && !memcmp(usb_wire, bt_wire[i], bt_sizes[i]));
+        for (unsigned k = 0; k < i; k++)
+            assert(bt_sizes[k] != bt_sizes[i] || memcmp(bt_wire[k], bt_wire[i], bt_sizes[i]));
+    }
+
+    /* Link loss during raster: the job fails, cleanup sends nothing, and the
+     * uncertain run blocks the next job before any command. */
+    pt_run_set(bt, PT_RUN_CLOSED); reset_wire(); clean_snapshot();
+    pappl_job_t *j = job(bt, "trim", 1, false);
+    pappl_pr_options_t *o = begin(j, d);
+    fail_opcode = 'G'; assert(!page_test(j, o, d));
+    size_t sent = wire_used; end(j, o, d);
+    assert(wire_used == sent && pt_run_get(bt) == PT_RUN_UNCERTAIN);
+    pappl_job_t *follower = job(bt, "trim", 1, false);
+    o = papplJobCreatePrintOptions(follower, 1, false);
+    reset_wire(); assert(!r_startjob(follower, o, d) && wire_used == 0);
+    end(follower, o, d);
+    /* Link loss while finalizing: the status stream ends after the print command. */
+    pt_run_set(bt, PT_RUN_CLOSED); reset_wire(); clean_snapshot();
+    j = job(bt, "trim", 1, false); o = begin(j, d); assert(page_test(j, o, d));
+    bt_eof = true; assert(!r_endjob(j, o, d)); bt_eof = false;
+    sent = wire_used; assert(r_endjob(j, o, d) && wire_used == sent);
+    papplJobDeletePrintOptions(o);
+    assert(pt_run_get(bt) == PT_RUN_UNCERTAIN);
+    follower = job(bt, "trim", 1, false);
+    o = papplJobCreatePrintOptions(follower, 1, false);
+    reset_wire(); assert(!r_startjob(follower, o, d) && wire_used == 0);
+    end(follower, o, d);
+    pt_run_set(bt, PT_RUN_CLOSED);
+
+    /* Idle polling: 0 never touches the device, N allows one attempt per window
+     * whether or not it succeeds, and job status reads are unaffected. */
+    pt_printer_state *state = pt_state(bt);
+    assert(state->idle_poll_seconds == -1);
+    unsigned opened = opens;
+    clean_snapshot(); assert(status_cb(bt)); clean_snapshot(); assert(status_cb(bt));
+    assert(opens == opened + 2);
+    state->idle_poll_seconds = 0; opened = opens; before = bt_reads;
+    for (int i = 0; i < 3; i++) assert(status_cb(bt));
+    assert(opens == opened && bt_reads == before);
+    clean_snapshot(); j = job(bt, "none", 1, false);
+    assert(pt_refresh_ready_media(j, d) && bt_reads > before);
+    state->idle_poll_seconds = 300; state->idle_polled = false; opened = opens;
+    clean_snapshot(); assert(status_cb(bt)); assert(status_cb(bt));
+    assert(opens == opened + 1 && pt_media_confirmed(bt));
+    /* The interval is exact: 299.5 s is too early, 300 s is due. */
+    clock_gettime(CLOCK_MONOTONIC, &state->last_idle_poll);
+    state->last_idle_poll.tv_sec -= 299;
+    state->last_idle_poll.tv_nsec -= 500000000L;
+    if (state->last_idle_poll.tv_nsec < 0) { state->last_idle_poll.tv_sec--; state->last_idle_poll.tv_nsec += 1000000000L; }
+    assert(status_cb(bt) && opens == opened + 1);
+    state->last_idle_poll.tv_sec -= 1;
+    clean_snapshot(); assert(status_cb(bt) && opens == opened + 2);
+    can_open = false; state->idle_polled = false; opened = opens;
+    for (int i = 0; i < 3; i++) assert(status_cb(bt));
+    assert(opens == opened + 1);
+    can_open = true; state->idle_poll_seconds = -1;
+
+    assert(usb_enumerations == enumerations && usb_reads == reads);
+}
+
 /* Tape width of the last print-information command on the wire. */
 static int printed_tape(void)
 {
@@ -893,6 +1006,8 @@ int main(int argc, char **argv)
     papplDeviceAddScheme("fixture", PAPPL_DEVTYPE_CUSTOM_LOCAL, NULL, dev_open, dev_close,
                          NULL, dev_write, dev_status, dev_id);
     papplDeviceAddScheme("ptouch", PAPPL_DEVTYPE_CUSTOM_LOCAL, NULL, dev_open, dev_close,
+                         NULL, dev_write, dev_status, dev_id);
+    papplDeviceAddScheme("ptouch-bt", PAPPL_DEVTYPE_CUSTOM_LOCAL, NULL, dev_open, dev_close,
                          NULL, dev_write, dev_status, dev_id);
     port = 20000 + getpid() % 20000;
     pappl_system_t *sys = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "finishing-test", port,
@@ -1233,6 +1348,8 @@ int main(int argc, char **argv)
     assert(!pt_chain_get(usb));
     o = papplJobCreatePrintOptions(j, 1, false); assert(o->header.cupsWidth == 85);
     papplJobDeletePrintOptions(o);
+
+    if (selected_model->pid == 0x20af) bluetooth_cases(sys, usb, d);
 
     /* State belongs to each queue, with no arbitrary eight-printer ceiling. */
     for (int i = 0; i < 10; i++) {

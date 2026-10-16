@@ -36,6 +36,9 @@ ssize_t pt_usb_count(uint16_t vid, uint16_t pid) { (void)vid; (void)pid; return 
 bool pt_usb_is_uri(const char *uri) { (void)uri; return false; }
 ssize_t pt_usb_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
 { (void)d; (void)uri; (void)buffer; (void)bytes; assert(!"Unexpected USB read"); return -1; }
+bool pt_bt_is_uri(const char *uri) { (void)uri; return false; }
+ssize_t pt_bt_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
+{ (void)d; (void)uri; (void)buffer; (void)bytes; assert(!"Unexpected Bluetooth read"); return -1; }
 static bool device_open(pappl_device_t *d, const char *uri, const char *name)
 { (void)d; (void)uri; (void)name; return true; }
 static void device_close(pappl_device_t *d) { (void)d; }

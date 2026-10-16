@@ -1,0 +1,177 @@
+#cloud-config
+# First boot of the ptouch Bluetooth print server (Raspberry Pi Zero 2 W).
+# Root and boot end up read-only (overlayroot); everything that must persist
+# lives on the ext4 data partition labelled ptdata, mounted at /data.
+
+hostname: ptouch-bt
+timezone: America/New_York
+ssh_pwauth: true
+
+users:
+  - name: pfa
+    groups: [adm, sudo, netdev]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: "@PASSWORD_HASH@"
+    ssh_authorized_keys:
+      - "@SSH_KEY@"
+
+bootcmd:
+  - [raspi-config, nonint, do_wifi_country, "@WIFI_COUNTRY@"]
+  - |
+    set -eu
+    if ! grep -q '^LABEL=ptdata' /etc/fstab; then
+      disk=/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /)")
+      blkid -L ptdata >/dev/null || mkfs.ext4 -q -L ptdata "${disk}p3"
+      mkdir -p /data
+      mount LABEL=ptdata /data
+      mkdir -p /data/docker /data/bluetooth /data/journal /data/ptouch
+      cp -a /var/lib/bluetooth/. /data/bluetooth/
+      cat >> /etc/fstab <<'EOF'
+    LABEL=ptdata  /data  ext4  defaults,noatime  0  2
+    /data/bluetooth  /var/lib/bluetooth  none  bind,x-systemd.requires-mounts-for=/data  0  0
+    /data/journal  /var/log/journal  none  bind,x-systemd.requires-mounts-for=/data  0  0
+    EOF
+      systemctl daemon-reload
+      mount /var/lib/bluetooth
+      mount /var/log/journal
+    fi
+
+write_files:
+  - path: /etc/docker/daemon.json
+    content: |
+      {"data-root": "/data/docker"}
+  - path: /etc/systemd/journald.conf.d/ptouch.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SyncIntervalSec=10s
+      SystemMaxUse=2G
+  - path: /etc/rpi/swap.conf.d/ptouch.conf
+    content: |
+      [Main]
+      Mechanism=zram
+  - path: /etc/systemd/system/ptouch.service
+    content: |
+      [Unit]
+      Description=ptouch print server (PT-P710BT over Bluetooth)
+      Requires=docker.service
+      Wants=bluetooth.service network-online.target
+      After=docker.service bluetooth.service network-online.target
+      RequiresMountsFor=/data
+
+      [Service]
+      EnvironmentFile=/data/ptouch/ptouch.env
+      ExecCondition=/bin/sh -c 'test -n "$PTOUCH_BT_ADDRESS" || { echo "PTOUCH_BT_ADDRESS is empty: run sudo ptouch-pair"; exit 1; }'
+      ExecStartPre=-/usr/bin/docker rm -f ptouch
+      ExecStart=/usr/bin/docker run --rm --name ptouch --network host \
+        --ulimit nofile=65536:65536 --env-file /data/ptouch/ptouch.env \
+        --log-driver journald --log-opt tag=ptouch ${PTOUCH_IMAGE}
+      ExecStop=/usr/bin/docker stop -t 20 ptouch
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/bin/ptouch-update
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Usage: sudo ptouch-update [tag]   (default edge; sha-<commit> pins or rolls back)
+      set -eu
+      image=ghcr.io/pfa230/ptouch-print-server:${1:-edge}
+      docker pull "$image"
+      sed -i "s|^PTOUCH_IMAGE=.*|PTOUCH_IMAGE=$image|" /data/ptouch/ptouch.env
+      systemctl restart ptouch
+      docker image prune -f >/dev/null
+      echo "ptouch now runs $image"
+  - path: /usr/local/bin/ptouch-pair
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Usage: sudo ptouch-pair [XX:XX:XX:XX:XX:XX]
+      # Without an address, scans for a switched-on PT-P710BT.
+      set -eu
+      addr=${1:-}
+      if [ -z "$addr" ]; then
+        echo "Scanning 20 s for PT-P710BT..."
+        bluetoothctl --timeout 20 scan on >/dev/null
+        addr=$(bluetoothctl devices | awk '/PT-P710BT/ {print $2; exit}')
+        [ -n "$addr" ] || { echo "No PT-P710BT found; is it on and in range?" >&2; exit 1; }
+      fi
+      if ! bluetoothctl info "$addr" | grep -q 'Bonded: yes'; then
+        # BlueZ pairs only a device it has seen in a scan.
+        if ! bluetoothctl info "$addr" >/dev/null 2>&1; then
+          echo "Scanning 20 s for $addr..."
+          bluetoothctl --timeout 20 scan on >/dev/null
+        fi
+        # Without pairable the Pi pairs but does not bond, and re-pairs on every connection.
+        bluetoothctl pairable on >/dev/null
+        bluetoothctl --agent NoInputNoOutput pair "$addr" ||
+          { bluetoothctl pairable off >/dev/null; echo "Pairing failed; pair interactively with bluetoothctl" >&2; exit 1; }
+        bluetoothctl pairable off >/dev/null
+        bluetoothctl info "$addr" | grep -q 'Bonded: yes' ||
+          { echo "Paired but not bonded; pair interactively with bluetoothctl" >&2; exit 1; }
+      fi
+      bluetoothctl trust "$addr"
+      sed -i "s|^PTOUCH_BT_ADDRESS=.*|PTOUCH_BT_ADDRESS=$addr|" /data/ptouch/ptouch.env
+      systemctl restart ptouch
+      echo "ptouch now prints to $addr"
+  - path: /usr/local/bin/ptouch-logs
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Usage: ptouch-logs [jobs] [journalctl options, e.g. -f, -b -1, --since today]
+      if [ "${1:-}" = jobs ]; then
+        shift
+        exec journalctl -t ptouch --grep '\[Job [0-9]+\]' "$@"
+      fi
+      exec journalctl -t ptouch "$@"
+  - path: /usr/local/sbin/ptouch-provision
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Runs once, after packages are installed; reboots into read-only mode on success.
+      set -eux
+      mountpoint -q /data
+      docker load -i /boot/firmware/ptouch/ptouch-image.tar.gz
+      if [ ! -f /data/ptouch/ptouch.env ]; then
+        cat > /data/ptouch/ptouch.env <<'EOF'
+      PTOUCH_IMAGE=ghcr.io/pfa230/ptouch-print-server:edge
+      PTOUCH_MODEL=PT-P710BT
+      PTOUCH_BT_ADDRESS=@BT_ADDRESS@
+      PTOUCH_IDLE_POLL_SECONDS=0
+      EOF
+      fi
+      # The container runs its own Avahi on the host network.
+      systemctl disable avahi-daemon.socket avahi-daemon.service
+      # Daily apt runs would only fill the RAM overlay.
+      systemctl disable apt-daily.timer apt-daily-upgrade.timer man-db.timer
+      systemctl enable ptouch.service
+      # It fails remounting the overlay root on every boot; nothing else needs it.
+      systemctl mask systemd-remount-fs.service
+      # The image ships Bluetooth soft-blocked; unblock it and its saved rfkill state.
+      for r in /sys/class/rfkill/rfkill*; do
+        [ "$(cat "$r/type")" != bluetooth ] || echo 0 > "$r/soft"
+      done
+      for f in /var/lib/systemd/rfkill/*:bluetooth; do echo 0 > "$f"; done
+      raspi-config nonint do_overlayfs 0
+      # Overlay only /; by default overlayroot also puts /data under the RAM overlay.
+      mount -o remount,rw /boot/firmware
+      sed -i 's/overlayroot=tmpfs /overlayroot=tmpfs:recurse=0 /' /boot/firmware/cmdline.txt
+      grep -q 'overlayroot=tmpfs:recurse=0 ' /boot/firmware/cmdline.txt
+      touch /etc/cloud/cloud-init.disabled
+      touch /run/ptouch-provisioned
+
+package_update: true
+packages:
+  - docker.io
+  - overlayroot
+
+runcmd:
+  - [/usr/local/sbin/ptouch-provision]
+
+power_state:
+  mode: reboot
+  condition: test -f /run/ptouch-provisioned

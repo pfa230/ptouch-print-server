@@ -16,6 +16,8 @@ The Brother raster protocol and device table are reused from
 explicitly below. Its 6/24 mm coverage is software-only. Other recognized models do not
 receive print output.
 
+PT-P710BT can also be reached over Bluetooth instead of USB (`PTOUCH_BT_ADDRESS`), for example from a Raspberry Pi while the printer runs on battery. That path is hardware-certified on 12 mm tape from a Raspberry Pi Zero 2 W ([Bluetooth gate](tests/BLUETOOTH-ACCEPTANCE.md)); 9 and 18 mm over Bluetooth are software-only, sending the same bytes as the certified USB path. See [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
+
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.
 - Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
@@ -98,8 +100,8 @@ cmake --build build-core
 ctest --test-dir build-core --output-on-failure
 ```
 
-This builds `ptcore` and the command probe, then runs the five core suites
-(tables, protocol, raster, status, cutter) and the Python capture suite.
+This builds `ptcore` and the command probe, then runs the six core suites
+(tables, protocol, raster, status, config, cutter) and the Python capture suite.
 
 The default full build requires `pkg-config` packages `pappl`, `libusb-1.0`,
 and `libpng`, in addition to the core test tools. Missing dependencies fail
@@ -250,6 +252,18 @@ protocol still follow `PTOUCH_MODEL`, and the printer connects on an actual prin
 An explicit `ptouch://Brother/<model>` override must exactly match the configured
 supported model; conflicting or unsupported custom USB URIs fail before commands.
 
+`PTOUCH_BT_ADDRESS` selects Bluetooth instead of USB for `PTOUCH_MODEL=PT-P710BT`. Set it to the paired printer's address, `XX:XX:XX:XX:XX:XX`. The server connects over RFCOMM channel 1 when a job starts, keeps the connection while jobs are queued, and closes it when the queue goes idle. USB is never used and never a fallback. A printer that is off, out of range, or connected to another device shows as offline, and queued jobs wait until it is reachable. A connection attempt gives up after 10 seconds. An address with another model, a malformed address, or an address combined with `PTOUCH_DEVICE_URI` fails startup. Bluetooth needs host networking; see [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
+
+`PTOUCH_IDLE_POLL_SECONDS` controls printer status reads while the queue is idle, on either transport:
+
+| Value | Idle behavior |
+|-------|---------------|
+| unset or empty | Read the printer whenever a client asks for status, at most every 2 seconds (the original behavior) |
+| `0` | Never read it while idle; tape and offline status update only when a job runs |
+| `N` | At most one read attempt per `N` seconds, counting failed attempts |
+
+Jobs always read live status before printing, whatever the setting. Over Bluetooth every idle read is a connection, which costs the printer's battery; use `0` for a battery-powered printer. Any other value fails startup.
+
 ### USB diagnostics
 
 `ptouch-app probe` enumerates only the custom USB scheme and reports whether
@@ -265,7 +279,7 @@ initialization (`ESC @`), then checks that those bytes reached USB. Use it only
 on a known closed tape run: initialization can destroy a held run. It is not a
 read-only status preflight or the isolated IPP/socket image smoke used in CI.
 Neither diagnostic chooses a different attached model when selection is absent
-or ambiguous.
+or ambiguous. Both diagnose USB only and refuse to run while `PTOUCH_BT_ADDRESS` is set.
 
 ## Deploy
 
@@ -275,6 +289,7 @@ The deploy image is published to GHCR as
 `.github/workflows/deploy.yml` on every push to `main`. Both pull requests and
 main run the core, driver, and capture suites and submit real IPP jobs to a socket
 sink in the deploy-image smoke before publication. Pull requests do not publish.
+Tags carry `linux/amd64` and `linux/arm64` variants; CI builds and tests the arm64 variant under QEMU on every pull request.
 
 The image is a multi-stage build (`Dockerfile.deploy`): PAPPL 1.4.11 and the app
 compile in a Debian build stage, and only the runtime libraries, `avahi-daemon`,
@@ -341,6 +356,8 @@ raster streams.
 segment itself. Behind a proxy, or on a bridge network, mDNS will not reach LAN
 clients: publish unicast DNS-SD records (RFC 6763 `_ipp._tcp` PTR/SRV/TXT) in
 your zone instead, pointing at wherever clients should connect.
+
+The compose example above is the USB deployment. For Bluetooth on a Raspberry Pi, follow [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
 
 The PT-2730 USB interface can be held by only one process. A dev/spike container
 holding the device must be stopped before this container starts; both cannot own

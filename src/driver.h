@@ -8,7 +8,7 @@
 #define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
 
 /* Confirm clean live tape before geometry is constructed, using a bounded
- * status query on the job-owned USB handle. Non-USB test transports retain
+ * status query on the job-owned printer connection. Socket test transports retain
  * configured media. Uncertain output blocks every transport until recovery. */
 bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device);
 

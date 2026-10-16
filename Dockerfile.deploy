@@ -3,7 +3,7 @@
 FROM debian:bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config git ca-certificates python3 \
-      libusb-1.0-0-dev libpng-dev libjpeg-dev zlib1g-dev \
+      libusb-1.0-0-dev libbluetooth-dev libpng-dev libjpeg-dev zlib1g-dev \
       libcups2-dev libcupsimage2-dev libssl-dev libavahi-client-dev libgnutls28-dev libkrb5-dev \
  && rm -rf /var/lib/apt/lists/*
 # Retain Debian security fixes while correcting only raster EOF reporting.
