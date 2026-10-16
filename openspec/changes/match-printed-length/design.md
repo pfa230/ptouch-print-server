@@ -56,6 +56,8 @@ User decision on 2026-10-16: “no physical acceptance check, I'll validate sepa
 
 This decision also excludes acceptance against the live `brother_12mm_item` template or user-supplied renders/captures. Repository fixtures are the complete acceptance inputs for this change. Completion does not require obtaining operator data, inspecting a live template, or asking the user for further validation material; those checks belong to the user's separate validation.
 
+Apply the same distinction to certification wording: preserve the historical P710BT hardware-test evidence and qualify current summaries in `README.md`, `docs/ADDING-A-MODEL.md`, and `openspec/config.yaml` so they explicitly identify this length correction as software-verified, with physical validation left to the user separately. Do not describe this correction as hardware-certified or claim that earlier measurements verify it. This is truthful documentation of the already chosen validation scope, not a recertification task or a prerequisite for archive/delivery. The existing batch-printing requirement that hardware-success claims need integrated physical evidence remains unchanged.
+
 Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in this change's ordinary validation record; leave historical physical acceptance documents unchanged.
 
 ## Risks / Trade-offs
@@ -73,6 +75,8 @@ Implement and verify locally under the apply workflow. Update README to distingu
 ## Cut Pass
 
 Removed the entire six-label physical gate, its preparation and execution tasks, tape budget, ruler measurements, service restoration steps, physical acceptance record, and live-template inspection prerequisite per the user's explicit decision. Retained software reconstruction of the same length and placement cases using repository fixtures only. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
+
+Keep the documentation qualification in the existing reconciliation task: the batch-printing hardware-evidence requirement and the user's software-only scope require accurate claims. Leaving an unqualified hardware-certified claim would imply this output change was physically tested; a new certification workflow is unnecessary.
 
 Each retained mechanism, check, record, and task has a concrete authority below. Requirement names refer to this change's deltas unless identified as an existing contract.
 
