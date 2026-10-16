@@ -1374,7 +1374,7 @@ static void cut_cases(pappl_printer_t *usb, pappl_printer_t *bt, pappl_device_t 
     assert(papplJobRelease(printing, "test")); await_terminal(printing);
     assert(!cut_during_raster && nested_cut == IPP_STATUS_ERROR_BUSY);
     assert(papplJobGetState(printing) == IPP_JSTATE_COMPLETED);
-    expect_wire(0, 180, 1, 0); assert(pt_run_get(usb) == PT_RUN_OPEN);
+    expect_wire(0, tx(180), 1, 0); assert(pt_run_get(usb) == PT_RUN_OPEN);
     /* Explicit cuts ignore disabled or rate-limited polling and keep its slot. */
     pt_printer_state *state = pt_state(usb);
     for (int seconds = 0; seconds <= 300; seconds += 300) {
