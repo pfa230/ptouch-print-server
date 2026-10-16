@@ -263,3 +263,12 @@ Between the two failed candidates, a normal marked label with chain off and EJEC
 It selects raster mode and automatic status, declares one continued row (page flag 1) on 12 mm tape, enables auto-cut and chain mode, keeps the 14-dot margin and PackBits compression, sends sixteen white bytes as one literal row, and ends with FF. It sends no invalidate, initialize, or EJECT. `pt_cmd_blank_continuation` builds these bytes, varying only the tape width, and Ptouch-Cut sends them.
 
 The row is 0.141 mm of raster at 180 dpi; the total tape feed and the remaining blank tail were not measured. The blank page remains held until the next job's precut. Both failed candidates transferred successfully, so a successful write alone is not evidence of a cut. This test does not establish a raster-free cutter command, PT-2730 behavior, other tape widths, or USB. Those, and the integrated IPP operation, have software captures only (`test_protocol`, `test_driver`). The raw JSONL records were staged temporarily; the bytes and observations above are the retained record. The original service was restored afterwards.
+
+## IPP cut implementation validation, 2026-10-16
+
+Results, 2026-10-16, on the implementation branch (main's 6e7fc07 is not yet an ancestor; the loop's integration stage covers it):
+- Pinned adapter dev image (`Dockerfile`): all four PAPPL patches applied with `--fuzz=0`; `cmake -S . -B build`, `cmake --build build` (no warnings) and `ctest --test-dir build --output-on-failure` passed 15/15, including `driver_finishings`, `driver_finishings_p710bt` (geometry, default finishing, continuation, length and Ptouch-Cut cases), `driver_cut_denied`, `pappl_raster`, `pappl_finishings`, `png_geometry`, `protocol` and `cut_probe_capture`.
+- Deploy image (`Dockerfile.deploy`): build-stage CTest passed 15/15. `scripts/smoke-image.py` passed for PT-2730 and PT-P710BT.
+- Documented request: a PT-P710BT deploy container on a socket sink held a none job; `ipptool -tv URI tests/ptouch-cut.ipptool` passed and the sink received exactly the 57-byte blank continuation. A repeat passed with zero bytes, `operations-supported` contained 24321, and Get-Jobs reported one job before and after.
+- `openspec validate add-ipp-cut-operation --strict` and `openspec validate --all --strict` passed.
+- Not caused by this change: `scripts/check-cups.py` fails at its first capture with `decode() missing 1 required positional argument: 'model'`; both scripts are unchanged from base 36bb072, where `decode` already required `model`.

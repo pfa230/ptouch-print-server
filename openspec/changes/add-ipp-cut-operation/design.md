@@ -95,6 +95,8 @@ Implement on the existing change branch. Use the loop's normal post-implementati
 
 ## Cut pass
 
+Validation-record repair: keep implementation results in the existing `tests/CUT-PROBE.md`; task updates from a loop implementer are checkbox changes only. Removed validation prose from `tasks.md`, whose worker contract rejects those edits. The evidence record serves task 3.1; console output alone loses the results, while another report would duplicate the existing document.
+
 Baseline revision: removed task 0.1, its manual pre-implementation merge prerequisite, and its ancestry check. They duplicate and conflict with the existing post-implementation integration stage. Retain ordinary print regressions on the branch and the existing integration checks on the result merged with main; no new integration mechanism is added.
 
 Timing cut: removed further baseline profiling and any test/PAPPL timing fix from this change. The user's follow-up request is served by issue #62, which retains the observations and verification needed for separate work. A note only in temporary transcripts would lose the deferred task; no new feature task or validation gate is needed.
