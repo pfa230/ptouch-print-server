@@ -68,10 +68,10 @@ from PT-2730's legacy eight-byte `ESC i c` command:
 | Fresh-run preparation | `pt_cmd_invalidate`: 100 zero bytes, then `pt_cmd_init`: `1b 40`. Omit both when continuing a healthy held run. |
 | Raster mode | `pt_cmd_rasterstart` with `FLAG_P700_INIT`: `1b 69 61 01`. |
 | Automatic status | `pt_cmd_auto_status(o, true)`: `1b 69 21 00`. |
-| Extended page information | `pt_cmd_printinfo_extended`: `1b 69 7a 84 00 mm 00 r0 r1 r2 r3 page 00`. `r0..r3` are the validated destination page's row count, little-endian. |
+| Extended page information | `pt_cmd_printinfo_extended`: `1b 69 7a 84 00 mm 00 r0 r1 r2 r3 page 00`. `r0..r3` are the transmitted print-area row count, little-endian: the logical page height minus the 28 dots of end feed. |
 | Compression | `pt_cmd_compression(o, 2)`: `4d 02` selects TIFF PackBits. |
 | Raster line | `pt_cmd_sendraster_packbits` wraps each complete 16-byte head line as `47 11 00 0f` followed by those bytes, a single literal run. |
-| Feed margin | `pt_cmd_margin(o, 14)`: `1b 69 64 0e 00`. |
+| Feed margin | `pt_cmd_margin(o, 14)`: `1b 69 64 0e 00`, one per end. |
 
 The extended page command uses width-valid/recovery flags `84`, unspecified
 media kind, zero fixed-length and reserved fields. `page` is 0 for a freshly
@@ -81,14 +81,22 @@ were verified by the integrated physical gate; separate-label probes did not
 verify them. Normal resolution and finishing use the existing mode/advanced
 builders and batch lifecycle, without half-cut or cut-every-N commands.
 
+Model-specific physical constraints (required feed ends and usable length range)
+live in one place, `pt_model_geometry` in `src/tables.c`. The P710BT's 14-dot end
+feed and 24.5 mm minimum are applied inside the requested page length, so a new
+model whose protocol adds end feed or a longer minimum must extend that function
+rather than hard-code a subtraction at output.
+
 Direct USB geometry probes on 2026-10-12 used this setup with first-page
 indication 0, normal resolution, autocut, chain-off, and terminal EJECT. The
 operator confirmed complete 52-, 76-, and 120-dot rectangles on 9, 12, and 18 mm
 tape. The existing 32/52/76/120/128-dot table is shared by both supported paths;
 6 and 24 mm remain software/documentation coverage for P710BT. These observations
 establish usable geometry, not integrated finishing, continuation, or recovery
-certification. The change's validation summary records retained probe evidence
-and any unavailable files separately.
+certification, and they predate the end-margin length correction. That correction
+is verified in software; its physical behavior is left to the operator's separate
+validation and is not certified here. The change's validation summary records
+retained probe evidence and any unavailable files separately.
 
 ## Adding the entry
 

@@ -251,6 +251,7 @@ static void run_image(pappl_printer_t *printer, int width, int height, int xppi,
 static void run_model(const char *model, int index)
 {
     selected_model = model; packbits = !strcmp(model, "PT-P710BT");
+    int end = packbits ? PT_END_MARGIN_PX : 0;  /* feed dots replaced at each end */
     assert(!setenv("PTOUCH_MODEL", model, 1));
     used = fail_row = written_rows = 0;
     pappl_pr_driver_t drv = {"ptouch", "Test", NULL, NULL};
@@ -276,22 +277,33 @@ static void run_model(const char *model, int index)
         assert(strcmp(format, "image/vnd.ptouch-raster"));
     }
     assert(png_count == 1); ippDelete(reply);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 1, 1, "none", true, 354);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 2, 1, "none", true, 354);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 0, 1, "none", true, 708);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 1, 1, "none", true, 354 - 2 * end);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 2, 1, "none", true, 354 - 2 * end);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 0, 1, "none", true, 708 - 2 * end);
     unsigned char *pixels = malloc(3000 * 300); assert(pixels);
     memset(pixels, 255, 3000 * 300);
-    pixels[5 * 76 + 2] = pixels[17 * 76 + 70] = 0;
-    for (int m = 0; m <= 4; m++) run_image(p, 76, 180, 180, 180, pixels, 3, m, 1, "none", true, m == 1 || m == 2 ? 354 : 180);
-    run_image(p, 76, 180, 180, 180, pixels, 3, 7, 1, "none", true, 354);
+    /* Markers sit inside the imageable along-tape window on both models. */
+    pixels[(end + 5) * 76 + 2] = pixels[(end + 17) * 76 + 70] = 0;
+    /* media4 submits an explicit top margin of 0; the P710BT requires its end
+     * feed, so that contradictory margin is rejected rather than overwritten. */
+    for (int m = 0; m <= 4; m++) {
+        bool ok = !(m == 4 && end);
+        run_image(p, 76, 180, 180, 180, pixels, 3, m, 1, "none", ok,
+                  ok ? (m == 1 || m == 2 ? 354 : 180) - 2 * end : 0);
+    }
+    run_image(p, 76, 180, 180, 180, pixels, 3, 7, 1, "none", true, 354 - 2 * end);
     run_image(p, 76, 180, 180, 180, pixels, 3, 8, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 180, pixels, 3, 9, 1, "none", false, 0);
-    run_image(p, 42, 180, 180, 180, pixels, 3, 10, 1, "none", true, 282);
-    run_image(p, 42, 180, 180, 180, pixels, 3, 11, 1, "none", true, 282);
+    run_image(p, 42, 180, 180, 180, pixels, 3, 10, 1, "none", true, 282 - 2 * end);
+    run_image(p, 42, 180, 180, 180, pixels, 3, 11, 1, "none", true, 282 - 2 * end);
     run_image(p, 76, 180, 180, 180, pixels, 3, 10, 1, "none", false, 0);
     assert(strstr(papplJobGetMessage(last_job), "printable width is 42"));
-    run_image(p, 76, 180, 0, 0, pixels, 3, 0, 3, "none", true, 540);
-    run_image(p, 76, 180, 180, 180, pixels, 3, 5, 1, "none", false, 0);
+    run_image(p, 76, 180, 0, 0, pixels, 3, 0, 3, "none", true, 3 * (180 - 2 * end));
+    /* An explicit 10 mm page is below the P710BT's published range, so PAPPL
+     * substitutes the default without attribute fidelity (the published minimum
+     * is asserted in the driver media-database checks); PT-2730 keeps it and the
+     * 180-dot image is rejected as longer than the 70-dot page. */
+    if (!end) run_image(p, 76, 180, 180, 180, pixels, 3, 5, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 180, pixels, 3, 6, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 360, pixels, 3, 0, 1, "none", false, 0);
     memset(pixels, 255, 3000 * 300); pixels[0] = pixels[200 * 299 + 199] = 0;
@@ -300,10 +312,17 @@ static void run_model(const char *model, int index)
     const char *scales[] = {"fit", "auto-fit", "auto", "fill"};
     static unsigned char scaled[7000][128];
     for (int c = 0; c < 4; c++) {
-        run_image(p, 200, 300, 180, 180, pixels, 3, 2, 1, scales[c], true, 354);
-        unsigned finished; assert(rows(scaled, &finished) == 354);
-        for (unsigned y = 0; y < 354; y++) for (unsigned x = 0; x < 128; x++) {
-            bool black = x >= 26 && x < 102 && (c == 3 || (y >= 120 && y < 234));
+        /* PAPPL's "fill" fills the whole page and so reaches the P710BT feed
+         * margins; that rejection is checked at the end because it leaves the
+         * physical run uncertain for the following jobs. */
+        bool fill = c == 3;
+        if (fill && end)
+            continue;
+        unsigned txrows = 354 - 2 * end;
+        run_image(p, 200, 300, 180, 180, pixels, 3, 2, 1, scales[c], true, txrows);
+        unsigned finished; assert(rows(scaled, &finished) == txrows);
+        for (unsigned y = 0; y < txrows; y++) for (unsigned x = 0; x < 128; x++) {
+            bool black = x >= 26 && x < 102 && (fill || (y + end >= 120 && y + end < 234));
             assert(scaled[y][x] == black);
         }
     }
@@ -313,56 +332,63 @@ static void run_model(const char *model, int index)
     for (int c = 0; c < 5; c++) {
         int o = orientations[c], w = c >= 2 ? 180 : 76, h = c >= 2 ? 76 : 180;
         memset(pixels, 255, w * h);
-        int mx[] = {2, w - 3, 11}, my[] = {5, h - 7, 19};
+        /* Along-tape marker coordinates stay inside the model's imageable ends. */
+        int mx[] = {c >= 2 ? end + 6 : 2, c >= 2 ? w - end - 7 : w - 3, c >= 2 ? end + 19 : 11};
+        int my[] = {c >= 2 ? 2 : end + 6, c >= 2 ? h - 3 : h - end - 7, c >= 2 ? 11 : end + 19};
         for (int i = 0; i < 3; i++) pixels[my[i] * w + mx[i]] = 0;
-        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, 180);
-        unsigned finishes; assert(rows(actual, &finishes) == 180);
-        unsigned char expected[180][128] = {{0}};
+        unsigned txrows = 180 - 2 * end;
+        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, txrows);
+        unsigned finishes; assert(rows(actual, &finishes) == txrows);
+        static unsigned char expected[180][128];
+        memset(expected, 0, sizeof expected);
         for (int i = 0; i < 3; i++) {
-            int x, y;
-            if (o == 3) { x = mx[i]; y = my[i]; }
-            else if (o == 6) { x = w - 1 - mx[i]; y = h - 1 - my[i]; }
-            else if (o == 4) { x = my[i]; y = w - 1 - mx[i]; }
-            else { x = h - 1 - my[i]; y = mx[i]; }
-            expected[y][26 + x] = 1;
+            int x, ly;
+            if (o == 3) { x = mx[i]; ly = my[i]; }
+            else if (o == 6) { x = w - 1 - mx[i]; ly = h - 1 - my[i]; }
+            else if (o == 4) { x = my[i]; ly = w - 1 - mx[i]; }
+            else { x = h - 1 - my[i]; ly = mx[i]; }
+            expected[ly - end][26 + x] = 1;
         }
-        if (memcmp(actual, expected, sizeof expected))
-            for (unsigned y = 0; y < 180; y++) for (unsigned x = 0; x < 128; x++)
+        if (memcmp(actual, expected, (size_t)txrows * 128))
+            for (unsigned y = 0; y < txrows; y++) for (unsigned x = 0; x < 128; x++)
                 if (actual[y][x] != expected[y][x]) fprintf(stderr, "orientation%d dot%u,%u actual%d expected%d\n", o, x, y, actual[y][x], expected[y][x]);
-        assert(!memcmp(actual, expected, sizeof expected));
+        assert(!memcmp(actual, expected, (size_t)txrows * 128));
     }
     unsigned finishes;
     pt_geometry g; assert(pt_tape_geometry(12, &g));
     for (int c = 0; c < 4; c++) {
         int o = orientations[c], w = c < 2 ? g.nominal_px : 180, h = c < 2 ? 180 : g.nominal_px;
         int first = o == 6 || o == 5 ? g.nominal_px - g.right_px : g.left_px;
+        int a_lo = end + 5, a_hi = 180 - end - 9;
         memset(pixels, 255, w * h);
-        int mx[] = {c < 2 ? first : 5, c < 2 ? first + g.imageable_px - 1 : 171};
-        int my[] = {c < 2 ? 5 : first, c < 2 ? 171 : first + g.imageable_px - 1};
+        int mx[] = {c < 2 ? first : a_lo, c < 2 ? first + g.imageable_px - 1 : a_hi};
+        int my[] = {c < 2 ? a_lo : first, c < 2 ? a_hi : first + g.imageable_px - 1};
         for (int i = 0; i < 2; i++) pixels[my[i] * w + mx[i]] = 0;
-        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, 180);
-        rows(actual, &finishes);
-        unsigned char expected[180][128] = {{0}};
+        unsigned txrows = 180 - 2 * end;
+        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, txrows);
+        assert(rows(actual, &finishes) == txrows);
+        static unsigned char expected[180][128];
+        memset(expected, 0, sizeof expected);
         for (int i = 0; i < 2; i++) {
-            int x, y;
-            if (o == 3) { x = mx[i] - first; y = my[i]; }
-            else if (o == 6) { x = g.imageable_px - 1 - (mx[i] - first); y = h - 1 - my[i]; }
-            else if (o == 4) { x = my[i] - first; y = w - 1 - mx[i]; }
-            else { x = g.imageable_px - 1 - (my[i] - first); y = mx[i]; }
-            expected[y][26 + x] = 1;
+            int x, ly;
+            if (o == 3) { x = mx[i] - first; ly = my[i]; }
+            else if (o == 6) { x = g.imageable_px - 1 - (mx[i] - first); ly = h - 1 - my[i]; }
+            else if (o == 4) { x = my[i] - first; ly = w - 1 - mx[i]; }
+            else { x = g.imageable_px - 1 - (my[i] - first); ly = mx[i]; }
+            expected[ly - end][26 + x] = 1;
         }
-        assert(!memcmp(actual, expected, sizeof expected));
+        assert(!memcmp(actual, expected, (size_t)txrows * 128));
         pixels[0] = 0;
         run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", false, 0);
     }
     memset(pixels, 255, 152 * 360);
     for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++)
-        pixels[(10 + dy) * 152 + 4 + dx] = 0;
-    run_image(p, 152, 360, 360, 360, pixels, 3, 0, 1, "none", true, 180);
+        pixels[(2 * end + 10 + dy) * 152 + 4 + dx] = 0;
+    run_image(p, 152, 360, 360, 360, pixels, 3, 0, 1, "none", true, 180 - 2 * end);
     rows(actual, &finishes); assert(actual[5][28]);
     memset(pixels, 255, 3000 * 300);
-    run_image(p, 76, 1, 180, 180, pixels, 3, 0, 1, "none", true, 35);
-    run_image(p, 76, 2125, 180, 180, pixels, 3, 0, 1, "none", true, 2125);
+    run_image(p, 76, 1, 180, 180, pixels, 3, 0, 1, "none", end ? false : true, end ? 0 : 35);
+    run_image(p, 76, 2125, 180, 180, pixels, 3, 0, 1, "none", true, 2125 - 2 * end);
     run_image(p, 76, 2126, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     /* Decoded full-width outlines exercise the common window on all five tapes. */
     pappl_pr_driver_data_t ready; papplPrinterGetDriverData(p, &ready);
@@ -377,17 +403,21 @@ static void run_model(const char *model, int index)
         snprintf(media.size_name, sizeof media.size_name, "custom_%dx100mm_%dx100mm", tapes[i], tapes[i]);
         assert(papplPrinterSetReadyMedia(p, 1, &media));
         int width = geometry.imageable_px;
+        unsigned txrows = 180 - 2 * end;
         memset(pixels, 255, width * 180);
         for (int y = 0; y < 180; y++) for (int x = 0; x < width; x++)
-            if (!y || y == 179 || !x || x == width - 1) pixels[y * width + x] = 0;
-        run_image(p, width, 180, 180, 180, pixels, 3, 0, 1, "none", true, 180);
-        assert(rows(actual, &finishes) == 180);
+            if (y == end || y == 179 - end ||
+                ((!x || x == width - 1) && y >= end && y < 180 - end))
+                pixels[y * width + x] = 0;
+        run_image(p, width, 180, 180, 180, pixels, 3, 0, 1, "none", true, txrows);
+        assert(rows(actual, &finishes) == txrows);
         int start = (128 - width) / 2;
-        for (int y = 0; y < 180; y++) for (int x = 0; x < 128; x++)
+        for (unsigned y = 0; y < txrows; y++) for (int x = 0; x < 128; x++)
             assert(actual[y][x] == (x >= start && x < start + width &&
-                (!y || y == 179 || x == start || x == start + width - 1)));
+                (!y || y == txrows - 1 || x == start || x == start + width - 1)));
     }
     assert(papplPrinterSetReadyMedia(p, 1, &original_media));
+    memset(pixels, 255, 3000 * 300);
     truncate_png = true;
     run_image(p, 76, 180, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     truncate_png = false;

@@ -83,11 +83,15 @@ and correctly triggered the driver's printable-window rejection.
 
 The bridge activates only for drivers declaring both standard trim enums and
 `finishings-col-database`. It replaces the explicit finishing declarations and
-four canonical media attributes: `media-col-database`, `media-size-supported`,
-`media-left-margin-supported`, and `media-right-margin-supported`. The driver
-supplies each supported fixed tape width, variable length, and physical margins;
-the bridge neither invents geometry nor relaxes raster validation. Legacy drivers
-retain their existing generated attributes and finishing acceptance.
+six canonical media attributes: `media-col-database`, `media-size-supported`,
+`media-left-margin-supported`, `media-right-margin-supported`,
+`media-top-margin-supported`, and `media-bottom-margin-supported`. It carries
+driver-supplied top/bottom supported margins alongside the left/right ones so
+the P710BT's required 14-dot feed ends cannot be contradicted by a generated
+zero. The driver supplies each supported fixed tape width, variable length, and
+physical margins; the bridge neither invents geometry nor relaxes raster
+validation. Legacy drivers retain their existing generated attributes and
+finishing acceptance.
 
 Job validation checks raw standard enums or one advertised collection template,
 rejects conflicting representations and unsupported values, and accepts collection

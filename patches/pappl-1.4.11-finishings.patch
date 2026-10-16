@@ -41,7 +41,8 @@
 +        name = ippGetName(attr);
 +        if (name && (!strncmp(name, "finishings-", 10) || !strcmp(name, "finishing-template-supported") ||
 +                     !strcmp(name, "media-col-database") || !strcmp(name, "media-size-supported") ||
-+                     !strcmp(name, "media-left-margin-supported") || !strcmp(name, "media-right-margin-supported")))
++                     !strcmp(name, "media-left-margin-supported") || !strcmp(name, "media-right-margin-supported") ||
++                     !strcmp(name, "media-top-margin-supported") || !strcmp(name, "media-bottom-margin-supported")))
 +          while ((old = ippFindAttribute(printer->driver_attrs, name, IPP_TAG_ZERO)) != NULL)
 +            ippDeleteAttribute(printer->driver_attrs, old);
 +      }
