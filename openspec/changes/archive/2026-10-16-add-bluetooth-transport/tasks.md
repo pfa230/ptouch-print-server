@@ -33,5 +33,5 @@
 
 ## 6. Final reconciliation
 
-- [ ] 6.1 Review implementation, tests, docs and evidence against both deltas, run strict OpenSpec validation, then sync specs and archive the change.
+- [x] 6.1 Review implementation, tests, docs and evidence against both deltas, run strict OpenSpec validation, then sync specs and archive the change. Codex reviewed the changes since e2c6758 (merge of main, test fix, gate record, pairing script): no lost merge behavior or overengineering; its two doc findings were fixed. Strict validation passed; specs synced.
 - [ ] 6.2 Open the pull request, confirm CI builds and tests both architectures without publishing, and merge only after 6.1.
