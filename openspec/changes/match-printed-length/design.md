@@ -2,104 +2,83 @@
 
 ## Context
 
-See `proposal.md` for the reported regression and scope.
+See `proposal.md` for the reported regression. Before this change, the P710BT driver declares and transmits every logical page row and sends a 14-dot feed-margin command. PT-2730 does not use that command. The existing raster callbacks already receive the logical row index and full page height, pack each row, and handle incomplete input and uncertain output.
 
-[verified] `r_startpage` in `src/driver.c` declares `cupsHeight` as the P710BT print-area row count and sends `ESC i d 0e 00`. `r_writeline` then sends every logical page row. `media_col_for` supplies no top/bottom margins, and `pt_media_attrs` publishes both as zero. PT-2730 uses neither this margin command nor the extended row-count command.
-
-[verified] The existing PNG filter already checks blank cross-tape canvas margins, preserves orientation/DPI, and derives omitted length from the original canvas. The production-driver and PNG IPP tests decode captured rows; `scripts/smoke-image.py` exercises the built image without USB. These are the existing integration points.
-
-[verified] Brother's [P710BT raster reference](https://download.brother.com/welcome/docp100064/cv_pte550wp750wp710bt_eng_raster_102.pdf), sections 2.3.3–2.3.4 and the margin command description, specifies 14-dot minimum end margins at 180 dpi and a 24.5 mm minimum physical feed length. The earlier integrated acceptance record explicitly did not measure actual consumed tape. The user's 36-to-40-mm report agrees with 28 extra dots, but there is no capture or calibrated measurement of that specific job yet.
+The stopped implementation contains work from the previous broad plan. This rescope replaces that plan; its checked tasks and earlier passing checks do not establish completion of the revised work.
 
 ## Goals / Non-Goals
 
-Keep logical page geometry separate from the printer's smaller print area, while sharing one definition of model-specific physical constraints. Use the current PAPPL callbacks and PNG preflight; retain constant-size batch state and existing failure handling.
+Correct the P710BT's duplicate feed allowance in the shared rendered-page path. Preserve content and the existing rendering pipeline. Use the fixed feed value already required by the protocol, without a model-geometry framework, page buffer, row counter, or new job state.
 
-No template names enter production code. No calibration knob, alternate protocol, dependency upgrade, new page buffer, finishing policy, or runtime fallback is needed. Bluetooth work in another worktree is outside this change.
+Media publication and limits, PNG length/orientation/DPI rules, explicit scaling, JPEG placement, dependencies, finishing, and model aliases retain their existing contracts. This change does not promise physical lengths below the printer's hardware limits or introduce a new minimum-length policy.
 
 ## Decisions
 
-### 1. Preserve logical page length and account for feed inside it
+### Replace blank rendered end rows with equivalent feed
 
-For a validated P710BT page containing N logical rows, keep the PAPPL page header at N and use a print-area height of N minus 28. Declare that reduced height in extended print information. Consume all N input rows, verify the first/last 14 rows are blank, and transmit only the intervening rows. Continue sending the existing 14-dot hardware margin command.
+Keep the logical page header at N rows. For P710BT, declare N minus 28 print-area rows and send the same number. Consume all N rendered/input rows, check that the first and last 14 have no printable ink, and omit only those blank rows from transmission. Keep the existing 14-dot feed command. PT-2730 continues transmitting all N rows.
 
-Thus a 36 mm page at 180 dpi becomes 255 logical dots: 227 transmitted rows plus 28 feed dots, approximately 35.98 mm. It must not become 255 transmitted rows plus 28 feed dots. A known internal marker retains its physical position because hardware feed replaces an equal number of blank logical rows.
+Use the existing row index, page height, packed row, and failure path. A single fixed feed constant in the driver can replace its current literal; no new geometry fields or per-page state are needed. Existing height validation already keeps supported pages larger than the 28-row reservation.
 
-Use the callback's existing row index and header height to identify boundary rows. Do not add a row counter or buffered page. The raster decoder must still consume and validate the trailing blank rows before `r_endpage` can make the page pending. Any nonblank boundary row or incomplete input fails through existing failure/recovery handling. For streaming raster, a trailing violation can occur after output has begun, so no normal finishing is sent and recovery can be required.
+For 36 mm at 180 dpi, 255 logical rows become 227 transmitted rows plus 28 feed dots. For 50 mm, 354 become 326 plus 28. Reconstructing the omitted blank strips around the transmitted rows must reproduce the original pixels and positions. Reducing the count without reducing the transmitted rows is inconsistent; unconditional removal can lose ink; shrinking the image changes its scale.
 
-Alternatives: setting feed to zero conflicts with the documented minimum and has no retained physical evidence; merely reducing the declared row count leaves the actual transmitted raster inconsistent; blindly dropping rows loses ink; shrinking the complete image breaks 1:1 printing. None meets the contract.
+### Keep image placement and validate the resulting rows once
 
-### 2. Extend existing geometry and media publication
+The PNG and PAPPL renderers continue producing the same full logical page. Do not publish new end margins, compact source images, change media headers, or introduce a special scaled-image path. End-row validation runs in the shared driver after existing image placement, so PNG, JPEG, PWG and URF output use the same correction. A page whose resulting ink reaches a replaced end row fails; do not move, resize, or crop it to make it pass.
 
-Keep the existing cross-tape table. Extend its model-aware use with the P710BT end-margin and minimum-length values; PT-2730 contributes zero new end reservation and retains its current minimum. Keep these values in one pure geometry definition used by publication, PNG preflight, and output extraction, without a generalized printer-profile framework or persisted fields.
+This keeps existing PNG preflight for selected dimensions and cross-tape margins. It adds no separate promise of early end-row rejection for images. A trailing end-row violation can be discovered after transfer has begun; reuse the same no-normal-finishing and uncertain-output handling as other transfer failures. All declared trailing input rows must still be consumed before a page can complete.
 
-Publish 14-dot P710BT end margins using the smallest integral hundredth-mm value covering at least 14 dots at 180 dpi (198), including database/default/ready media and supported-margin attributes. Make the P710BT minimum physical length 2450 hundredths-mm, retaining the 300 mm maximum and existing valid presets. Reject shorter explicit and image-derived P710BT pages instead of silently padding them to another size. Keep existing PT-2730 5 mm PNG padding.
+### Verify the correction with existing fixtures
 
-Honor larger submitted margins. Reject explicit margins that promise an imageable area outside the physical window; do not silently overwrite them. Update the existing PAPPL media bridge only to carry driver-supplied top/bottom supported margins alongside the existing left/right attributes, if its generated attributes would otherwise contradict publication. Keep its activation and legacy-driver behavior.
+Add direct 36 mm PNG captures with explicit and omitted length, and rendered raster captures at 36 and 50 mm. Assert declared/transmitted row counts and reconstruct end feed to check total length and an internal marker's physical position. Keep the existing PT-2730 byte expectations and failure coverage. Exercise nonblank end rows and input truncated inside otherwise blank trailing rows using existing fixtures.
 
-Alternative: hard-code a 4 mm subtraction only at output. That leaves clients rendering into advertised printable ends and makes geometry/input validation disagree with the actual printer. A configurable correction duplicates fixed protocol geometry without a calibration need.
+Adjust only existing P710BT fixtures/decoders affected by the corrected row count or required blank ends; retain their assertions. Do not add another harness, a new finishing/orientation/DPI matrix, an 86 mm joined-pair acceptance task, or baseline/candidate build machinery. Existing finishing and continuation suites continue to run.
 
-### 3. Accept full-page PNG canvases only when physical margins are blank
+Run the normal core checks and the full adapter suite once against the current pinned container dependencies, plus strict OpenSpec validation. Reuse available build images and caches. An unrelated existing harness defect is reported separately rather than repaired or made a new completion gate here.
 
-Derive PNG automatic length from the original oriented canvas, before any blank-margin compaction. Extend the existing blank-margin preflight to both axes: accept content already fitting the selected imageable area, or compact verified white margins from a full-page canvas into that area before PAPPL placement. Validate after transparency is composited over white, using the existing source DPI/orientation rules. Account for larger selected margins without changing them.
+### Software-only completion
 
-At 1:1, reject nonblank required margins before page setup or raster. Compact only known page-margin strips, not an arbitrary ink bounding box, so asymmetric whitespace and content positions remain intentional. Cover both normal/reverse orientations and square DPI conversion. All length-derived header fields continue to describe the full logical page.
-
-JPEG and explicit scaling continue through PAPPL placement using the truthful imageable area; output extraction accounts for feed exactly once for every format. Streaming raster uses the same physical window and validates the actual boundary rows as they arrive.
-
-Alternative: only add advertised margins. That would reject every existing full-page PNG canvas even when its ends are already blank. Trimming any whitespace indiscriminately would change intentional positioning and image-derived length.
-
-### 4. Finish with software verification; physical validation is separate
-
-Extend the existing core/adapter/PNG/CUPS/image-smoke checks. Reconstruct the physical page in capture assertions as 14 blank dots, decoded print-area rows, and 14 blank dots. Compare both total length and internal pixels, rather than treating fewer transmitted rows as sufficient proof. Preserve PT-2730 byte-identical captures and keep incomplete-stream, wrong-tape, finishing, and recovery checks.
-
-User decision on 2026-10-16: “no physical acceptance check, I'll validate separately.” Complete this change with software captures, pixel/length reconstruction, PT-2730 byte comparisons, and the required container/CUPS checks. No physical acceptance check, printer output, SSH operation, or service/configuration change belongs to this change. Sync, archive, and delivery do not wait for operator measurements. The user owns physical validation separately; do not claim measured physical success from software evidence.
-
-This decision also excludes acceptance against the live `brother_12mm_item` template or user-supplied renders/captures. Repository fixtures are the complete acceptance inputs for this change. Completion does not require obtaining operator data, inspecting a live template, or asking the user for further validation material; those checks belong to the user's separate validation.
-
-Apply the same distinction to certification wording: preserve the historical P710BT hardware-test evidence and qualify current summaries in `README.md`, `docs/ADDING-A-MODEL.md`, and `openspec/config.yaml` so they explicitly identify this length correction as software-verified, with physical validation left to the user separately. Do not describe this correction as hardware-certified or claim that earlier measurements verify it. This is truthful documentation of the already chosen validation scope, not a recertification task or a prerequisite for archive/delivery. The existing batch-printing requirement that hardware-success claims need integrated physical evidence remains unchanged.
-
-Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in existing check output and `README.md`, outside the change directory; leave historical physical acceptance documents unchanged.
+The user explicitly excludes physical acceptance and will validate separately. Repository fixtures are the complete acceptance inputs. No live template, user-provided render, printer access, SSH, service change, physical record, or certification exercise is required. Report software evidence as software evidence. A brief README note is sufficient; no certification/configuration-document reconciliation or separate validation record is required.
 
 ## Risks / Trade-offs
 
-- [Existing templates may put ink within 2 mm of an end] → Reject with a clear physical-window error; do not silently alter the template or crop it. Prove this behavior with repository fixtures. Inspection of the live `brother_12mm_item` template belongs to the user's separate validation and is not an acceptance requirement.
-- [Minimum feed and margin behavior could differ from the manual in chained output] → Verify the commanded geometry in software, report that physical behavior is unverified, and leave separate physical validation to the user.
-- [Centimm, dot, and image-box rounding can disagree by a row] → Derive all boundaries from the same physical geometry and assert reconstructed pixels/lengths across orientations, DPI, minimum/maximum lengths, and explicit margins.
-- [New end margins can be hidden by CUPS caches or PAPPL generated attributes] → Check the real CUPS media metadata and document refreshing an existing queue's cached media. Do not replace user margins at runtime.
-- [Trailing raster ink is discovered after transfer begins] → Preserve no-finalization and recovery-required behavior; buffering an entire page solely to reject earlier is unnecessary.
+- Ink in a reserved end row cannot be preserved within the same physical length. Fail visibly instead of discarding it; already-transferred output follows existing recovery.
+- The commanded feed model has not been physically validated by this change. Physical validation belongs to the user and does not block software completion.
+- The previous implementation is broader than this plan. Reconcile it during implementation, removing the superseded additions rather than layering another workaround on them. Preserve separately authorized agent-alias configuration.
 
 ## Migration Plan
 
-Implement and verify locally under the apply workflow. Update README to distinguish total page length from transmitted print area and explain new P710BT fit/minimum-length rejection. Record software checks and their limits without adding a hardware acceptance task. Leave spec sync and archival to the loop's archive stage after software implementation, checks, and review are complete, then use the configured delivery path. Physical validation by the user is separate and does not block completion.
+Keep this rescope local. Implement the revised tasks, then let the loop's archive stage sync delta specs and archive after software checks and review. Do not restart the stopped loop as part of this planning request. No deployment is included.
 
 ## Cut Pass
 
-Removed the entire six-label physical gate, its preparation and execution tasks, tape budget, ruler measurements, service restoration steps, physical acceptance record, and live-template inspection prerequisite per the user's explicit decision. Retained software reconstruction of the same length and placement cases using repository fixtures only. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
+Removed: new model-specific minimum lengths and boundary policies; geometry fields and model geometry helper; published end margins and PAPPL bridge changes; PNG end compaction and special scaling paths; new CUPS metadata work and unrelated harness repairs; expanded finishing/orientation/DPI/86 mm acceptance matrices; certification paperwork and separate validation records. Physical and live-template gates remain excluded by the user's decision.
 
-Keep the documentation qualification in the existing reconciliation task: the batch-printing hardware-evidence requirement and the user's software-only scope require accurate claims. Leaving an unqualified hardware-certified claim would imply this output change was physically tested; a new certification workflow is unnecessary.
+Each retained item below names its authority and the simplest implementation; the last column explains why a smaller version fails.
 
-Each retained mechanism, check, record, and task has a concrete authority below. Requirement names refer to this change's deltas unless identified as an existing contract.
-
-| Retained item | Authority | Simplest version and why a smaller one fails |
+| Retained item | Authority | Simplest version; failure if reduced further |
 | --- | --- | --- |
-| Model-specific end-margin value | printer-device: Selected model controls the print protocol | One fixed value through existing geometry; a shared nonzero reservation changes PT-2730 output. |
-| Model-specific minimum-length value | label-rendering: Advertised tape media is usable | One physical minimum; retaining the 5 mm P710BT claim permits labels the documented feed limit lengthens. |
-| Reduced transmitted height | printer-device: P710BT feed counted once | Derive N minus 28; declaring N repeats the reported length error. |
-| Existing row index for extraction | server-architecture: Strict physical rendering | Reuse y and the header; a new counter or buffer duplicates available information. |
-| Streaming blank-end check | label-rendering: Nonblank raster end margin | Check only replaced boundary rows; unconditional skipping loses ink. |
-| PNG end preflight and compaction | label-rendering: Default 1:1 PNG rendering does not discard image content | Extend the existing blank-strip check; publication alone rejects valid full-page canvases and blind compaction loses ink. |
-| Original-canvas length derivation | label-rendering: Image-derived physical length | Retain length before compaction; deriving it afterward shortens the requested page. |
-| Truthful standard media publication | server-architecture: Canonical physical media | Extend the current media path and bridge only as necessary; zero published end margins invite incompatible client rendering. |
-| Explicit-margin fit rejection | label-rendering: Conservative CUPS custom margins | Reuse fit errors; overwriting caller margins violates submitted geometry. |
-| Existing pending/run/failure state | Existing batch-printing: Failure does not override the finishing choice | Reuse current state with no added fields; normal finishing after a boundary-row failure hides incomplete output. |
-| Reconstructed length and pixel assertions | label-rendering: Physical label length includes feed margins | Extend current decoders; row-count-only checks can pass while moving or shrinking ink. |
-| PT-2730 byte comparison | printer-device: PT-2730 regression | Compare existing captures; a test that merely completes can miss changed legacy bytes. |
-| Existing CUPS and container/image checks | label-rendering: Consistent model-specific media; project config apply guidance | Reuse existing suites; core-only checks miss PAPPL publication and placement. |
-| Software validation evidence in existing check output and README | User decision: physical validation is separate; label-rendering: Reported 36 mm label | Retain existing check output and reconstructed pixels/lengths with README qualification; a pass/fail tally alone does not establish what was verified, and a separate change-directory record duplicates existing evidence and violates the loop's implementation scope. |
-| Task 1.1 | server-architecture: Canonical physical media | One geometry change with boundary tests; separate per-callback constants can diverge. |
-| Task 1.2 | label-rendering: Advertised tape media is usable | One media-publication change with CUPS checks/docs; output-only correction leaves false capabilities. |
-| Task 2.1 | label-rendering: Default 1:1 PNG rendering does not discard image content | Extend existing preflight/tests/docs together; output-only trimming loses PNG ink or position. |
-| Task 2.2 | printer-device: Selected model controls the print protocol | One callback correction with raster/legacy checks; changing the height alone leaves transmitted rows inconsistent. |
-| Task 2.3 | Project config: adapter validation in the container | Extend the existing image smoke; a second harness duplicates it and omitting it misses deployed integration. |
-| Task 3.1 | Project config apply guidance; printer-device: PT-2730 regression | Run required integration checks once after implementation; core compilation alone does not demonstrate adapter behavior. |
-| Task 3.2 | User decision: no physical acceptance check; repository OpenSpec lifecycle and cut-pass instructions | Reconcile existing software evidence and its limits, leaving sync/archive to the loop's later archive stage; retaining a physical prerequisite blocks software-only completion, while implementation-stage archival breaks the loop's plan digest and review. |
+| Existing 14-dot feed value | printer-device: Selected model controls the print protocol | Reuse one fixed driver value; changing feed to zero changes the existing printer protocol. |
+| N minus 28 declared and transmitted rows | label-rendering: Page length includes P710BT end feed | Derive both from the logical page; changing only one leaves count and data inconsistent. |
+| Blank end-row validation | label-rendering: Page length includes P710BT end feed | Inspect the existing packed row; skipping without checking can discard ink. |
+| Existing row index | Existing server-architecture: Constant-size deferred batch lifecycle | Reuse the callback index; a new row counter duplicates it. |
+| Existing logical page height | label-rendering: Page length includes P710BT end feed | Reuse the header height; a stored copy adds state that can disagree. |
+| Existing failure and completion state | Existing label-rendering: Incomplete raster input fails visibly | Reuse current failure path and full-input completion; normal finishing could hide missing trailing input or lost ink. |
+| Shared rendered-page correction | Existing server-architecture: Public IPP printer application | Correct the existing driver path once; per-format corrections duplicate the accounting. |
+| Explicit-length 36 mm PNG capture | User's reported 36 mm template; label-rendering: Page length includes P710BT end feed | One existing PNG fixture; driver-only tests miss the reported image route. |
+| Image-derived 36 mm PNG capture | Existing label-rendering: Explicit media geometry is authoritative | Reuse that fixture without a length; the explicit case alone does not exercise PNG-derived length. |
+| 36 mm raster capture with marker reconstruction | label-rendering: Page length includes P710BT end feed | Extend the existing capture; row counts alone can miss shifted ink. |
+| 50 mm raster capture | label-rendering: A second length | Reuse the same fixture at another length; one length can hide a hard-coded output height. |
+| Nonblank-end failure case | label-rendering: Page length includes P710BT end feed | Extend an existing fixture; success-only checks do not establish content preservation. |
+| Truncated trailing-row case | Existing label-rendering: Incomplete raster input fails visibly | Truncate one existing fixture within blank end rows; otherwise omitted input could be mistaken for successful feed replacement. |
+| Existing PT-2730 byte expectations | printer-device: PT-2730 regression | Keep current assertions; successful job completion alone can miss changed legacy output. |
+| Affected P710BT fixture/decoder updates | Existing regression coverage | Correct only blank-end inputs and feed-aware expectations; stale fixtures fail for geometry they no longer represent. |
+| Core checks | Existing loop configuration | Run existing commands; removing them bypasses configured checks. |
+| Pinned container adapter suite | Project apply guidance | Reuse the full current suite; core checks do not exercise PAPPL callbacks. |
+| Strict OpenSpec validation | Repository OpenSpec workflow | Run the existing validator; unchecked deltas may not sync coherently. |
+| Brief README behavior note | User's length correction; label-rendering: Page length includes P710BT end feed | Explain feed accounting and rejection; more documentation adds no behavior or evidence. |
+| Task 1.1 | printer-device: Selected model controls the print protocol | Reconcile the existing driver correction and its direct raster/failure regressions together; leaving the superseded production additions preserves the over-scoped implementation. |
+| Task 1.2 | label-rendering: Page length includes P710BT end feed | Verify the existing PNG route and adjust affected fixtures; a separate renderer or expanded matrix is unnecessary. |
+| Task 2.1 | Project apply guidance and repository OpenSpec workflow | Run existing integration checks after the correction; compilation alone misses adapter behavior. |
+| Existing check output as evidence | User's software-only validation decision | Report actual results; a separate committed evidence record duplicates them. |
+| Previously authorized model aliases | User's explicit model-alias requests | Preserve existing tooling changes; reverting them would undo separately requested work. |
