@@ -1,10 +1,10 @@
 # Raspberry Pi Bluetooth deployment
 
-This guide runs the server on a wall-powered Raspberry Pi Zero 2 W and reaches a battery-powered PT-P710BT over Bluetooth, so the printer can move around the house. The Bluetooth path is software-tested; its physical acceptance is pending (see [README](../README.md#capabilities)).
+This guide runs the server on a wall-powered Raspberry Pi Zero 2 W and reaches a battery-powered PT-P710BT over Bluetooth, so the printer can move around the house. The Bluetooth path passed its [hardware gate](../tests/BLUETOOTH-ACCEPTANCE.md) on a Pi Zero 2 W with 12 mm tape.
 
 ## What you need
 
-- Raspberry Pi Zero 2 W running **64-bit** Raspberry Pi OS Lite (Bookworm). The published image has `linux/arm64` and `linux/amd64` variants; a 32-bit OS cannot run it.
+- Raspberry Pi Zero 2 W running **64-bit** Raspberry Pi OS Lite (Bookworm or Trixie). The published image has `linux/arm64` and `linux/amd64` variants; a 32-bit OS cannot run it.
 - The PT-P710BT, charged, within about 10 m of the Pi. Walls shorten the range.
 
 ## 1. Install Docker
@@ -21,14 +21,17 @@ Switch the printer on, then on the Pi:
 ```sh
 bluetoothctl
 power on
+pairable on
 scan on            # wait for PT-P710BT and note its address
 pair XX:XX:XX:XX:XX:XX
 trust XX:XX:XX:XX:XX:XX
 scan off
+pairable off
+info XX:XX:XX:XX:XX:XX   # must show Bonded: yes
 quit
 ```
 
-If pairing asks for a PIN, try `0000`. BlueZ stores the pairing under `/var/lib/bluetooth` on the SD card, so it survives reboots. The container needs no BlueZ of its own.
+Pairing needs no PIN. Without `pairable on` the Pi pairs but does not bond, so every connection pairs again and takes up to 10 seconds instead of about 2. BlueZ stores the pairing under `/var/lib/bluetooth` on the SD card, so it survives reboots. The container needs no BlueZ of its own.
 
 ## 3. Hand mDNS to the container
 

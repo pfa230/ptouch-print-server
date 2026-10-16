@@ -16,7 +16,7 @@ The Brother raster protocol and device table are reused from
 explicitly below. Its 6/24 mm coverage is software-only. Other recognized models do not
 receive print output.
 
-PT-P710BT can also be reached over Bluetooth instead of USB (`PTOUCH_BT_ADDRESS`), for example from a Raspberry Pi while the printer runs on battery. That path is software-tested only; physical acceptance is pending. See [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
+PT-P710BT can also be reached over Bluetooth instead of USB (`PTOUCH_BT_ADDRESS`), for example from a Raspberry Pi while the printer runs on battery. That path is hardware-certified on 12 mm tape from a Raspberry Pi Zero 2 W ([Bluetooth gate](tests/BLUETOOTH-ACCEPTANCE.md)); 9 and 18 mm over Bluetooth are software-only, sending the same bytes as the certified USB path. See [docs/PI-DEPLOYMENT.md](docs/PI-DEPLOYMENT.md).
 
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.

@@ -27,8 +27,8 @@
 ## 5. Physical acceptance
 
 - [x] 5.1 Prepare a concrete bounded Bluetooth gate in `tests/` before any output: pairing check; a reset-free status reply on a fresh connection; one 12 mm default-trim label with receiving-ready time recorded; two jobs queued together sharing one connection, then closed when idle; a chain-only job followed after the queue went idle by a chain-and-final job; the measured connect failure time with the printer off; a job queued while the printer is off that prints after power-on; polling `0` showing no idle connects in the log; a USB-attached unit receiving nothing; and a Pi reboot followed by a label without re-pairing. State the label budget and stop conditions, and present the gate for approval.
-- [ ] 5.2 After approval, run the gate on the Pi with the P710BT on battery; record captures, job logs and operator observations, stopping on the first failed criterion. If the held chain end is lost across the idle reconnect, stop and report it as a contract decision rather than adjusting behavior.
-- [ ] 5.3 Update README capabilities and the acceptance record with the certified Bluetooth scope and anything left software-only.
+- [x] 5.2 After approval, run the gate on the Pi with the P710BT on battery; record captures, job logs and operator observations, stopping on the first failed criterion. If the held chain end is lost across the idle reconnect, stop and report it as a contract decision rather than adjusting behavior. Passed 2026-10-16, all 8 steps and 9 labels on a Pi Zero 2 W; the held chain end survived the idle reconnect. Results and deviations are in `tests/BLUETOOTH-ACCEPTANCE.md`.
+- [x] 5.3 Update README capabilities and the acceptance record with the certified Bluetooth scope and anything left software-only.
 
 ## 6. Final reconciliation
 
