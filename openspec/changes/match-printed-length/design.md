@@ -54,11 +54,13 @@ Extend the existing core/adapter/PNG/CUPS/image-smoke checks. Reconstruct the ph
 
 User decision on 2026-10-16: “no physical acceptance check, I'll validate separately.” Complete this change with software captures, pixel/length reconstruction, PT-2730 byte comparisons, and the required container/CUPS checks. No physical acceptance check, printer output, SSH operation, or service/configuration change belongs to this change. Sync, archive, and delivery do not wait for operator measurements. The user owns physical validation separately; do not claim measured physical success from software evidence.
 
+This decision also excludes acceptance against the live `brother_12mm_item` template or user-supplied renders/captures. Repository fixtures are the complete acceptance inputs for this change. Completion does not require obtaining operator data, inspecting a live template, or asking the user for further validation material; those checks belong to the user's separate validation.
+
 Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in this change's ordinary validation record; leave historical physical acceptance documents unchanged.
 
 ## Risks / Trade-offs
 
-- [Existing templates may put ink within 2 mm of an end] → Reject with a clear physical-window error; do not silently alter the template or crop it. The live `brother_12mm_item` operator template is not stored in this repository; implementation acceptance must inspect its rendered output when available, without adding its name as a special case.
+- [Existing templates may put ink within 2 mm of an end] → Reject with a clear physical-window error; do not silently alter the template or crop it. Prove this behavior with repository fixtures. Inspection of the live `brother_12mm_item` template belongs to the user's separate validation and is not an acceptance requirement.
 - [Minimum feed and margin behavior could differ from the manual in chained output] → Verify the commanded geometry in software, report that physical behavior is unverified, and leave separate physical validation to the user.
 - [Centimm, dot, and image-box rounding can disagree by a row] → Derive all boundaries from the same physical geometry and assert reconstructed pixels/lengths across orientations, DPI, minimum/maximum lengths, and explicit margins.
 - [New end margins can be hidden by CUPS caches or PAPPL generated attributes] → Check the real CUPS media metadata and document refreshing an existing queue's cached media. Do not replace user margins at runtime.
@@ -70,7 +72,7 @@ Implement and verify locally under the apply workflow. Update README to distingu
 
 ## Cut Pass
 
-Removed the entire six-label physical gate, its preparation and execution tasks, tape budget, ruler measurements, service restoration steps, and physical acceptance record per the user's explicit decision. Retained software reconstruction of the same length and placement cases. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
+Removed the entire six-label physical gate, its preparation and execution tasks, tape budget, ruler measurements, service restoration steps, physical acceptance record, and live-template inspection prerequisite per the user's explicit decision. Retained software reconstruction of the same length and placement cases using repository fixtures only. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
 
 Each retained mechanism, check, record, and task has a concrete authority below. Requirement names refer to this change's deltas unless identified as an existing contract.
 

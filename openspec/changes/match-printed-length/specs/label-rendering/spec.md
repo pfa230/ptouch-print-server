@@ -84,7 +84,7 @@ With print-scaling none, the server SHALL reject PNG content that cannot fit the
 
 ### Requirement: Advertised tape media is usable
 
-The server SHALL advertise supported nominal tape widths and publish actual imageable margins through media-ready and media-default after confirmation. Every advertised tape width SHALL be accepted by media publication and printing. Geometry validation SHALL use the physical tape's imageable window. P710BT publication SHALL include its required 14-dot end margins and a 24.5 mm minimum physical page length; PT-2730 publication SHALL retain existing geometry and limits.
+The server SHALL advertise supported nominal tape widths and publish actual imageable margins through media-ready and media-default after confirmation. Every advertised tape width SHALL be accepted by media publication and printing. Geometry validation SHALL use the physical tape's imageable window, rather than a different tape's cached margins. P710BT publication SHALL include its required 14-dot end margins and a 24.5 mm minimum physical page length; PT-2730 publication SHALL retain existing geometry and limits.
 
 #### Scenario: All advertised widths
 - **WHEN** each advertised 6, 9, 12, 18, or 24 mm tape is reported loaded

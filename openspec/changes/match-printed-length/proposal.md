@@ -26,6 +26,6 @@ None.
 
 ## Impact
 
-Implementation is expected in `src/driver.c`, `src/filter_png.c`, and the existing geometry helpers/headers, with narrowly scoped changes to the PAPPL media-attribute bridge if needed for top/bottom margins. Extend the existing production-driver, PNG, raster, CUPS, and image-smoke checks; update `README.md` and `patches/README.md` only if its bridge changes. Record software validation in this change without modifying historical physical acceptance records.
+Implementation is expected in `src/driver.c`, `src/filter_png.c`, and the existing geometry helpers/headers, with narrowly scoped changes to the PAPPL media-attribute bridge if needed for top/bottom margins. Extend the existing production-driver, PNG, raster, CUPS, and image-smoke checks; update `README.md`, and update `patches/README.md` only if the PAPPL media bridge changes. Record software validation using repository fixtures only, without modifying historical physical acceptance records or requiring live-template inspection.
 
 No template-specific offset, client protocol, calibration setting, dependency upgrade, new spooler, or additional page buffer is proposed. Preserve PT-2730 byte-identical regressions. This proposal authorizes no implementation, physical printing, production configuration change, or rollout.
