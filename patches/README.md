@@ -130,6 +130,17 @@ shows the decode failure and a job canceled before receiving data shows
 Remove this patch when a pinned upstream release lists jobs on the multi-queue
 landing page and renders `job-state-message`.
 
+## PAPPL printer operations and printing authorization
+
+Both image builds apply `pappl-1.4.11-printer-operations.patch` after the job-history patch, with the same strict patch flags. It changes `pappl/printer-ipp.c` and the installed public header `pappl/printer.h`. Its two independent parts serve the project-local Ptouch-Cut operation (`0x5f01`):
+
+- **Operation advertisement.** PAPPL copies its standard `operations-supported` and the driver attributes separately, so a driver-supplied value produced a second, partial attribute. When the driver declares `operations-supported`, the patch merges those enums into the printer's standard attribute once and removes the driver copy. Requested-attribute filtering is unchanged, and Get-Printers merges each printer's value into its own attribute. The driver declares `0x5f01` for PT-P710BT only; other drivers are unaffected.
+- **Printing authorization.** PAPPL's public `papplClientIsAuthorized` checks administrator access and rejects non-localhost clients when no authentication is configured. The patch adds public `bool papplPrinterIsAuthorized(pappl_client_t *client)`, which delegates to PAPPL's existing private Print-Job/Create-Job check `_papplPrinterIsAuthorized`, including its HTTP denial response. Ptouch-Cut calls it before acquiring the device. No authentication, group, or TLS policy is copied.
+
+The application links against the added public symbol, so both images must apply the patch. `test_driver` verifies one complete operation list with and without requested attributes, model-scoped advertisement, unauthenticated Print-Job and Ptouch-Cut from a non-localhost peer, and denial of both by a configured authorization callback before device access.
+
+Remove the advertisement part when a pinned upstream release merges driver-provided operations into `operations-supported`. Remove the authorization part when a pinned upstream release provides a supported public API applying the printer's printing authorization to a client request.
+
 ## Verification
 
 `test_pappl_raster` submits real IPP jobs to a minimal PAPPL driver and captures

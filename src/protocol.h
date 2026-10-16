@@ -31,4 +31,10 @@ size_t pt_cmd_margin(uint8_t *o, uint16_t dots);            /* 1b6964 lo hi    E
 size_t pt_cmd_sendraster(uint8_t *o, const uint8_t *data, size_t len);
 size_t pt_cmd_sendraster_packbits(uint8_t *o, const uint8_t *data, size_t len);
 
+/* P710BT chain continuation releasing a held label: rasterstart, auto status,
+ * one-row continued page for the loaded tape, auto-cut and chain on, 14-dot
+ * margin, PackBits, one white row, FF. No initialize, invalidate or EJECT.
+ * Writes 57 bytes. */
+size_t pt_cmd_blank_continuation(uint8_t *o, uint8_t mm);
+
 #endif /* PT_PROTOCOL_H */

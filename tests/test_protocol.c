@@ -47,5 +47,21 @@ int main(void) {
     assert(pt_cmd_sendraster(o, row, 2) == 5 && memcmp(o, "\x47\x02\x00\xAB\xCD", 5) == 0);
     assert(pt_cmd_sendraster_packbits(o, row, 2) == 6 &&
            memcmp(o, "\x47\x03\x00\x01\xAB\xCD", 6) == 0);
+
+    /* Physically confirmed P710BT/12 mm release sequence; only the width varies. */
+    static const uint8_t blank12[] =
+        "\x1b\x69\x61\x01" "\x1b\x69\x21\x00"
+        "\x1b\x69\x7a\x84\x00\x0c\x00\x01\x00\x00\x00\x01\x00"
+        "\x1b\x69\x4d\x40" "\x1b\x69\x4b\x00" "\x1b\x69\x64\x0e\x00" "\x4d\x02"
+        "\x47\x11\x00\x0f" "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0" "\x0c";
+    memset(o, 0xa5, sizeof o);
+    assert(pt_cmd_blank_continuation(o, 12) == 57 && memcmp(o, blank12, 57) == 0 && o[57] == 0xa5);
+    const uint8_t widths[] = {6, 9, 18, 24};
+    for (unsigned i = 0; i < sizeof widths; i++) {
+        uint8_t expected[sizeof blank12];
+        memcpy(expected, blank12, sizeof expected);
+        expected[13] = widths[i];
+        assert(pt_cmd_blank_continuation(o, widths[i]) == 57 && memcmp(o, expected, 57) == 0);
+    }
     return 0;
 }

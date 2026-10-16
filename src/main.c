@@ -84,6 +84,7 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     if (bt_address()) pt_bt_register();
     else pt_usb_register();
     papplSystemSetPrinterDrivers(sys, NDRIVERS, g_drivers, NULL /*autoadd*/, NULL, pt_driver_cb, NULL);
+    papplSystemSetOperationCallback(sys, pt_cut_op_cb, NULL);
 
     papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
 

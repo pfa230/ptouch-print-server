@@ -3,7 +3,8 @@
 The optional `ptouch-cut-probe` target exercises cutter command sequences without
 changing the application driver. Socket captures verify bytes; real USB tests
 and physical observations establish whether labels print and cut correctly.
-Only the Brother PT-2730 has physical evidence. The four-mode `batch` gate
+Apart from the [PT-P710BT held-label release](#pt-p710bt-held-label-release)
+below, only the Brother PT-2730 has physical evidence. The four-mode `batch` gate
 below passed its bounded eight-label check on 24 mm tape; the separate 21-label integrated application
 and recovery acceptance also passed on 12 mm tape.
 
@@ -240,3 +241,25 @@ subsequent job geometry.
 The corrected runs reported zero printer error bits and consumed receiving-ready
 after every page. The physical results, together with the software checks in
 [FINISHINGS.md](FINISHINGS.md), establish the finishing behavior.
+
+## PT-P710BT held-label release
+
+This direct hardware test on 2026-10-16 selected the mechanism behind Ptouch-Cut. It was recorded in diagnostic commit `9e239ae` (`tests/CUT-ONLY-PREP.md` on the local `test/cut-only-probe` branch). It used PT-P710BT over Bluetooth (RFCOMM channel 1) on the Pi at `ptouch-bt.iot.pfa.name`, with 12 mm TZe tape. The production service was stopped and test-only fixtures were sent outside the IPP server. Before each candidate, a marked label printed in chain mode reached receiving-ready, and the operator confirmed that its end was held. Each candidate was sent once, without retries.
+
+| Candidate | Bytes | Status | Physical result |
+| --- | --- | --- | --- |
+| Chain off, then EJECT | `1b 69 4b 08 1a`: 5 bytes, no initialization, page setup or raster | No response; the 20-second completion deadline expired | Not released |
+| Zero-raster page from [`nbuchwitz/ptouch` af16cac](https://github.com/nbuchwitz/ptouch/commit/af16cac251baa845d77fd2ccde6bdac6ed926bf3) | 239 bytes: initialization, page settings declaring zero rows, auto-cut on, chain off, margin, compression, EJECT | Clean | Not released |
+| One white row as a continuation page | The 57 bytes below | Printing (type 6, phase 1), print-completed (type 1), receiving-ready (type 6, phase 0), zero error bits | Operator confirmed the preceding label cut free |
+
+Between the two failed candidates, a normal marked label with chain off and EJECT printed and cut free, confirming the connection and cutter. The selected sequence:
+
+```text
+1b696101 1b692100 1b697a84000c00010000000100
+1b694d40 1b694b00 1b69640e00 4d02
+4711000f 00000000000000000000000000000000 0c
+```
+
+It selects raster mode and automatic status, declares one continued row (page flag 1) on 12 mm tape, enables auto-cut and chain mode, keeps the 14-dot margin and PackBits compression, sends sixteen white bytes as one literal row, and ends with FF. It sends no invalidate, initialize, or EJECT. `pt_cmd_blank_continuation` builds these bytes, varying only the tape width, and Ptouch-Cut sends them.
+
+The row is 0.141 mm of raster at 180 dpi; the total tape feed and the remaining blank tail were not measured. The blank page remains held until the next job's precut. Both failed candidates transferred successfully, so a successful write alone is not evidence of a cut. This test does not establish a raster-free cutter command, PT-2730 behavior, other tape widths, or USB. Those, and the integrated IPP operation, have software captures only (`test_protocol`, `test_driver`). The raw JSONL records were staged temporarily; the bytes and observations above are the retained record. The original service was restored afterwards.

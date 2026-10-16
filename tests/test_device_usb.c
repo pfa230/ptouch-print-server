@@ -30,6 +30,7 @@ static bool no_listeners(pappl_system_t *, const char *);
 #define papplPrinterCreate capture_printer_create
 #define papplSystemAddListeners no_listeners
 #define pt_driver_cb unused_driver_cb
+#define pt_cut_op_cb unused_cut_op_cb
 #define pt_filter_png unused_filter_png
 #define main pt_application_main
 #include "../src/main.c"
@@ -40,6 +41,8 @@ static bool no_listeners(pappl_system_t *, const char *);
 bool unused_driver_cb(pappl_system_t *s, const char *name, const char *device_uri,
                       const char *id, pappl_pr_driver_data_t *data, ipp_t **attrs, void *cb)
 { (void)s; (void)name; (void)device_uri; (void)id; (void)data; (void)attrs; (void)cb; return false; }
+bool unused_cut_op_cb(pappl_client_t *client, void *data)
+{ (void)client; (void)data; return false; }
 bool unused_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
 { (void)job; (void)device; (void)data; return false; }
 static char queue_id[100], queue_uri[100];

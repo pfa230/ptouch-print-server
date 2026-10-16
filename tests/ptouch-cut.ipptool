@@ -1,0 +1,14 @@
+# Release the held label on a PT-P710BT queue with project-local Ptouch-Cut.
+# 0x5f01 is not an IANA-registered operation, so it is sent by number.
+#
+#   ipptool -tv ipp://HOST:8000/ipp/print/ptouch tests/ptouch-cut.ipptool
+{
+	NAME "Ptouch-Cut"
+	OPERATION 0x5f01
+	GROUP operation-attributes-tag
+	ATTR charset attributes-charset utf-8
+	ATTR naturalLanguage attributes-natural-language en
+	ATTR uri printer-uri $uri
+	ATTR name requesting-user-name $user
+	STATUS successful-ok
+}

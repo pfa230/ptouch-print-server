@@ -1,0 +1,72 @@
+--- a/pappl/printer-ipp.c
++++ b/pappl/printer-ipp.c
+@@ -75,6 +75,36 @@ _papplPrinterCopyAttributesNoLock(
+   _papplCopyAttributes(client->response, printer->driver_attrs, ra, IPP_TAG_ZERO, false);
+   _papplPrinterCopyStateNoLock(printer, IPP_TAG_PRINTER, client->response, client, ra);
+ 
++  ipp_attribute_t *extra_ops = ippFindAttribute(printer->driver_attrs, "operations-supported", IPP_TAG_ENUM);
++
++  if (extra_ops && (!ra || cupsArrayFind(ra, "operations-supported")))
++  {
++    // Merge driver operations into this printer's standard value, the
++    // second-to-last copy; earlier printers in the response have one each...
++    ipp_attribute_t *attr, *ops = NULL, *copy = NULL;
++    cups_len_t	op;
++
++    for (attr = ippGetFirstAttribute(client->response); attr; attr = ippGetNextAttribute(client->response))
++    {
++      if (ippGetName(attr) && !strcmp(ippGetName(attr), "operations-supported"))
++      {
++        ops  = copy;
++        copy = attr;
++      }
++    }
++
++    if (ops && copy)
++    {
++      for (op = 0; op < ippGetCount(extra_ops); op ++)
++      {
++        if (!ippContainsInteger(ops, ippGetInteger(extra_ops, op)))
++          ippSetInteger(client->response, &ops, ippGetCount(ops), ippGetInteger(extra_ops, op));
++      }
++
++      ippDeleteAttribute(client->response, copy);
++    }
++  }
++
+   if (!ra || cupsArrayFind(ra, "copies-supported"))
+   {
+     // Filter copies-supported value based on the document format...
+@@ -804,6 +834,22 @@ _papplPrinterIsAuthorized(
+ }
+ 
+ 
++//
++// 'papplPrinterIsAuthorized()' - Authorize a client for printing.
++//
++// This function applies the printer's Print-Job/Create-Job authorization to
++// the client's request.  On failure it has already sent the HTTP error
++// response.
++//
++
++bool					// O - `true` on success, `false` on failure
++papplPrinterIsAuthorized(
++    pappl_client_t *client)		// I - Client
++{
++  return (_papplPrinterIsAuthorized(client));
++}
++
++
+ //
+ // '_papplPrinterProcessIPP()' - Process an IPP Printer request.
+ //
+--- a/pappl/printer.h
++++ b/pappl/printer.h
+@@ -425,6 +425,7 @@ extern void		papplPrinterHTMLFooter(pappl_client_t *client) _PAPPL_PUBLIC;
+ extern void		papplPrinterHTMLHeader(pappl_client_t *client, const char *title, int refresh) _PAPPL_PUBLIC;
+ 
+ extern bool		papplPrinterIsAcceptingJobs(pappl_printer_t *printer) _PAPPL_PUBLIC;
++extern bool		papplPrinterIsAuthorized(pappl_client_t *client) _PAPPL_PUBLIC;
+ extern bool		papplPrinterIsDeleted(pappl_printer_t *printer) _PAPPL_PUBLIC;
+ extern bool		papplPrinterIsHoldingNewJobs(pappl_printer_t *printer) _PAPPL_PUBLIC;
+ extern void		papplPrinterIterateActiveJobs(pappl_printer_t *printer, pappl_job_cb_t cb, void *data, int first_index, int limit) _PAPPL_PUBLIC;
