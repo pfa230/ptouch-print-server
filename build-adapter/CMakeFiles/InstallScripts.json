@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/pfa/projects/ptouch-print-server/.worktrees/match-printed-length/build-adapter/cmake_install.cmake",
-		"/home/pfa/projects/ptouch-print-server/.worktrees/match-printed-length/build-adapter/tests/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
