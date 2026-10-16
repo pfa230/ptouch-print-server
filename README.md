@@ -25,8 +25,9 @@ PT-P710BT can also be reached over Bluetooth instead of USB (`PTOUCH_BT_ADDRESS`
 - Uses standard IPP **finishings** for cuts between labels and at batch end,
   including an advertised chain-only collection template. Queue contents and
   idle time do not choose whether to cut.
-- Rejects a job whose width does not match the loaded tape, before anything is
-  sent as page setup or raster to the printer.
+- Never prints on the wrong tape. A job for another supported width waits,
+  reports `media-needed`, and prints after the tape is swapped; cancel it to give
+  up. Until the tape matches, only status requests reach the printer.
 - Reports `offline` when the printer is switched off instead of disappearing, and
   recovers on its own when it comes back - queued jobs then print.
 
@@ -120,10 +121,13 @@ These tests use no printer; physical behavior requires acceptance on the affecte
 
 Media dimensions describe the physical tape, and `media-ready` publishes the
 loaded nominal width with its physical left/right margins. The supported tape
-widths are 6, 9, 12, 18, and 24 mm. A page whose width does not match the loaded
-tape is refused before raster output. The default `print-scaling=none` preserves
-physical size; explicit standard scaling requests use PAPPL's placement policy.
-The server does not silently choose fit or crop to rescue a mismatched design.
+widths are 6, 9, 12, 18, and 24 mm. A job whose first page is for another
+supported width waits, reports `media-needed`, and prints after the tape is
+swapped; cancel it to give up. A page matching no supported width, or a later
+page whose width differs from the job's tape, is refused before raster output.
+The default `print-scaling=none` preserves physical size; explicit standard
+scaling requests use PAPPL's placement policy. The server does not silently
+choose fit or crop to rescue a mismatched design.
 
 For PNG at `print-scaling=none`, use the printer's 180 dpi resolution. PNGs
 without resolution metadata are interpreted as 180 dpi; square DPI metadata
@@ -296,9 +300,10 @@ visible through `docker logs`; no debug logfile or separate tail process is
 needed. dbus and Avahi startup failures stop the entrypoint and remain visible.
 The container has no persistent state, so no volume is needed.
 
-If a job reports uncertain output, inspect `docker logs ptouch` and
-`docker exec ptouch ptouch-app jobs -d ptouch` before restarting; job states and
-standard IPP Get-Job-Attributes identify aborted work. Power-cycle the printer,
+If a job reports uncertain output, check the job list on the web interface's
+landing page, `http://<host>:8000/`, before restarting. It shows the 20 most recent
+jobs with each failed job's reason, such as "Write to printer failed; output
+uncertain"; `docker logs ptouch` holds further detail. Power-cycle the printer,
 then run `docker restart ptouch` and check
 `docker exec ptouch ptouch-app status -d ptouch`. Explicitly resubmit the desired
 failed job after recovery. A clean status or USB replug alone does not clear

@@ -96,7 +96,7 @@ A detected output, raster decode, or printer-status failure SHALL fail the job w
 
 ### Requirement: Existing rendering is preserved
 
-The server SHALL retain 1:1 default printing, strict tape-width rejection, and offline media recovery as defined by label-rendering and printer-device. The finishing choice SHALL NOT change rendered pixels or page dimensions. Advertised formats and copy limits SHALL describe executable behavior. PT-P710BT hardware success SHALL require integrated physical acceptance. PT-2730 SHALL retain byte-identical print regressions; changed PT-2730 print bytes or physical command policy SHALL additionally require a separately bounded physical check before claiming preservation.
+The server SHALL retain 1:1 default printing, strict tape-width matching, and offline media recovery as defined by label-rendering and printer-device. The finishing choice SHALL NOT change rendered pixels or page dimensions. Advertised formats and copy limits SHALL describe executable behavior. PT-P710BT hardware success SHALL require integrated physical acceptance. PT-2730 SHALL retain byte-identical print regressions; changed PT-2730 print bytes or physical command policy SHALL additionally require a separately bounded physical check before claiming preservation.
 
 #### Scenario: Copies
 - **WHEN** a valid PNG requests copies within its advertised supported range

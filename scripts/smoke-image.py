@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import queue
+import re
 import socket
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 import zlib
 
@@ -221,7 +223,8 @@ def main():
             "-e", f"PTOUCH_MODEL={args.model}", args.image)
         mapping = json.loads(run("docker", "inspect", "--format",
                                  "{{json .NetworkSettings.Ports}}", name))
-        url = f"ipp://127.0.0.1:{mapping['8000/tcp'][0]['HostPort']}/ipp/print/ptouch"
+        port = mapping['8000/tcp'][0]['HostPort']
+        url = f"ipp://127.0.0.1:{port}/ipp/print/ptouch"
         with tempfile.TemporaryDirectory(prefix="ptouch-smoke-") as temp:
             directory = Path(temp)
             image = directory / "label.png"
@@ -295,9 +298,23 @@ def main():
             assert sink.take() == b"", "Wrong-tape image emitted printer commands"
             malformed = directory / "malformed.png"
             malformed.write_bytes(b"\x89PNG\r\n\x1a\n")
-            print(submit(url, directory, malformed, state=8))
+            output = submit(url, directory, malformed, state=8)
+            print(output)
             wire = sink.take()
             assert wire == b"", "Malformed PNG emitted printer commands"
+            # A job canceled before it has data has no message and no reason bits.
+            canceled = ipp(url, directory,
+                           operation("Create-Job", "", "EXPECT job-id WITH-VALUE >0 DEFINE-VALUE job-id")
+                           + operation("Cancel-Job", "ATTR integer job-id $job-id", "")
+                           + operation("Get-Job-Attributes", "ATTR integer job-id $job-id",
+                                       "EXPECT job-state WITH-VALUE 7"))
+            print(canceled)
+            # The landing page lists the failed jobs with their reasons.
+            home = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).read().decode()
+            for result, reason in ((output, "PNG decode failed: "), (canceled, ": job-canceled-by-user")):
+                job_id = re.search(r"job-id \(integer\) = (\d+)", result).group(1)
+                row = re.search(rf"<tr><td>{job_id}</td>.*?</tr>", home, re.S)
+                assert row and reason in row.group(0), row
             print(submit(url, directory, image, "ATTR enum finishings 60"))
             commands = decode(sink.take(), args.model)
             check_geometry(commands, 1)
