@@ -404,8 +404,14 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
         assert(header.cupsHeight == lengths[i] && cupsRasterWriteHeader2(raster, &header));
         unsigned char row[128]; assert(header.cupsBytesPerLine <= sizeof row);
         memset(row, mode == CUPS_RASTER_WRITE_APPLE ? 255 : 0, sizeof row);
-        for (unsigned y = 0; y < header.cupsHeight; y++)
+        for (unsigned y = 0; y < header.cupsHeight; y++) {
+            /* A distinct final row flushes the preceding compressed blank run.
+             * Column zero is outside the printable window, so the row remains
+             * printable-blank when its packet is truncated below. */
+            if (damage == 2 && i == pages - 1 && y == header.cupsHeight - 1)
+                row[0] ^= 0x80;
             assert(cupsRasterWritePixels(raster, row, header.cupsBytesPerLine) == header.cupsBytesPerLine);
+        }
     }
     cupsRasterClose(raster);
     if (damage == 1) {
@@ -478,7 +484,8 @@ static void raster_length_case(pappl_printer_t *printer, unsigned height)
     int fd = mkstemp(path); assert(fd >= 0);
     cups_raster_t *raster = cupsRasterOpen(fd, CUPS_RASTER_WRITE_PWG); assert(raster);
     cups_page_header2_t header;
-    pwg_media_t media = {"custom", NULL, NULL, 1200, (int)height * 2540 / 180};
+    /* Round centimm up so conversion back to dots retains the requested row. */
+    pwg_media_t media = {"custom", NULL, NULL, 1200, (int)((height * 2540 + 179) / 180)};
     assert(cupsRasterInitPWGHeader(&header, &media, "black_1", 180, 180, "one-sided", "normal"));
     header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount] = 0;
     assert(header.cupsHeight == height && cupsRasterWriteHeader2(raster, &header));
@@ -486,6 +493,13 @@ static void raster_length_case(pappl_printer_t *printer, unsigned height)
     for (unsigned y = 0; y < height; y++) {
         memset(row, 0, header.cupsBytesPerLine);
         if (y == 100) row[5] = 0x80; /* input dot 40, inside the imageable window */
+        /* A 12 mm page is wider than its window. Bits outside the printable area
+         * and in byte padding are not ink, so a P710BT end row carrying only
+         * those bits still validates blank and is replaced by feed. */
+        if (is_p710bt() && (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= height)) {
+            row[0] = 0x80;
+            row[header.cupsBytesPerLine - 1] = 0xff;
+        }
         assert(cupsRasterWritePixels(raster, row, header.cupsBytesPerLine) == header.cupsBytesPerLine);
     }
     cupsRasterClose(raster); close(fd);

@@ -234,9 +234,11 @@ The P710BT integrated [hardware gate](tests/P710BT-ACCEPTANCE.md) passed all fou
 finishing policies, held-run continuation, wrong-media rejection, offline queue
 recovery, and explicit uncertain-output recovery. It used 15 complete labels,
 including four operator-requested repeat labels, and predates the end-feed length
-correction above. That correction is verified in software only; its physical
-behavior is left to the operator's separate validation. Direct geometry probes
-remain separate evidence; 6/24 mm have software coverage only.
+correction above. That correction passes the core, both model driver, and PNG
+geometry suites with pinned PAPPL 1.4.11 and CUPS 2.4.2-3+deb12u9. This is software
+verification only; physical behavior is left to the operator's separate
+validation. Direct geometry probes remain separate evidence; 6/24 mm have
+software coverage only.
 
 ## Configuration
 

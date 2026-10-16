@@ -425,18 +425,18 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     if (!pt_tape_geometry(batch->tape_mm, &g) ||
         !pt_page_width_matches(o, &g, batch->tape_mm))
         return pt_fail_job(j);
+    uint8_t packed[16], buf[24];
+    pt_pack_window(packed, l, g.left_px, g.imageable_px);
     const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
     if (model->pid == 0x20af &&
         (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= o->header.cupsHeight)) {
-        for (unsigned i = 0; i < o->header.cupsBytesPerLine; i++)
-            if (l[i]) {
+        for (unsigned i = 0; i < sizeof packed; i++)
+            if (packed[i]) {
                 papplJobSetMessage(j, "Raster ink in a physical end margin that hardware feed replaces");
                 return pt_fail_job(j);
             }
         return true;
     }
-    uint8_t packed[16], buf[24];
-    pt_pack_window(packed, l, g.left_px, g.imageable_px);
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
                     pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
                     pt_cmd_sendraster(buf, packed, sizeof packed);
