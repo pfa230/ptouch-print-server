@@ -23,6 +23,7 @@
 
 - [x] 4.1 In `.github/workflows/deploy.yml`, set up QEMU, add a non-publishing `linux/arm64` build step beside the amd64 check build, and add `linux/arm64` to the publish step; verify on the pull request that the arm64 build passes all CTest suites under emulation, and record the duration. Done on PR #52, run 38634794603: 14/14 suites passed; the arm64 step took 14 min 50 s (amd64: 4 min 7 s).
 - [x] 4.2 Write the Pi deployment guide in `docs/` (64-bit Raspberry Pi OS Lite, Docker, `bluetoothctl` pair and trust, disabling host `avahi-daemon`, `--network host` with no USB mount, the three variables, recommended polling `0`, about 10 m range, mid-job link loss recovery); review each command against the design and the container's entrypoint.
+- [x] 4.3 Add `deploy/pi/` to build an unattended, power-loss-tolerant SD card (read-only overlay root, persistent `/data` for Docker, pairing, journal and configuration; `ptouch-update`, `ptouch-pair`, `ptouch-logs`), and document it in the Pi guide; verify on hardware. Issue #56. Verified on a Pi Zero 2 W: first boot, `/data` persistence and `/` reset across reboot, pairing, Bluetooth and service up after reboot, one 12 mm label printed over Bluetooth.
 
 ## 5. Physical acceptance
 
