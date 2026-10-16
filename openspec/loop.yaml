@@ -2,11 +2,15 @@ defaultBranch: main
 worktrees: .worktrees
 agents:
   codex: [loop-codex, -s, read-only]
-  opus: [loop-claude, --model, opus, --permission-mode, auto]
+  claude: [loop-claude, --model, opus, --permission-mode, auto]
+  deepseek: [loop-opencode, -m, openrouter/deepseek/deepseek-v4.1-flash]
+  mimo: [loop-opencode, -m, openrouter/xiaomi/mimo-v2.6-flash]
+  glm: [loop-opencode, -m, openrouter/~z-ai/glm-flash-latest]
+  muse-contrib: [loop-opencode, -m, meta/muse-spark-1.3-contributor]
 roles:
   proposalReviewer: codex
-  planReviser: opus
-  implementer: opus
+  planReviser: claude
+  implementer: claude
   implementationReviewer: codex
 attempts:
   proposalReview: 3
