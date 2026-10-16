@@ -390,9 +390,7 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
                                 bool collection, int pages, int copies, int bits, cups_mode_t mode,
                                 int damage)
 {
-    /* The P710BT's third page must stay above its 24.5 mm physical minimum and
-     * round-trip through the centimm media length at 180 dpi. */
-    const unsigned lengths[] = {180, 360, is_p710bt() ? 189 : 90};
+    const unsigned lengths[] = {180, 360, 90};
     char path[] = "/tmp/ptouch-batch-raster-XXXXXX";
     int fd = mkstemp(path); assert(fd >= 0);
     cups_raster_t *raster = cupsRasterOpen(fd, mode); assert(raster);
@@ -406,10 +404,8 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
         assert(header.cupsHeight == lengths[i] && cupsRasterWriteHeader2(raster, &header));
         unsigned char row[128]; assert(header.cupsBytesPerLine <= sizeof row);
         memset(row, mode == CUPS_RASTER_WRITE_APPLE ? 255 : 0, sizeof row);
-        for (unsigned y = 0; y < header.cupsHeight; y++) {
-            if (damage == 2) row[0] = y == 0 || y == header.cupsHeight - 1 ? 128 : 0;
+        for (unsigned y = 0; y < header.cupsHeight; y++)
             assert(cupsRasterWritePixels(raster, row, header.cupsBytesPerLine) == header.cupsBytesPerLine);
-        }
     }
     cupsRasterClose(raster);
     if (damage == 1) {
@@ -455,11 +451,15 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
                 finishing, pages, bits, mode, papplJobGetState(job), papplJobGetMessage(job));
     assert(papplJobGetState(job) == (aborted ? IPP_JSTATE_ABORTED : IPP_JSTATE_COMPLETED));
     if (damage) {
-        /* The P710BT rejects ink in a replaced end row before any raster leaves. */
-        if (is_p710bt())
-            expect_wire(1, damage == 1 ? tx(180) : 0, 0, 0);
+        /* damage 1 appends a trailing byte after a complete page; damage 2
+         * truncates the stream inside the last page's blank trailing rows. Both
+         * fail as incomplete input without finishing. */
+        if (damage == 1)
+            expect_wire(1, tx(180), 0, 0);
+        else if (is_p710bt())
+            expect_wire(1, tx(180) + tx(360), 1, 0);
         else
-            expect_wire(1, damage == 1 ? 180 : 539, damage == 1 ? 0 : 1, 0);
+            expect_wire(1, 539, 1, 0);
         assert(pt_run_get(printer) == PT_RUN_UNCERTAIN);
     } else {
         pt_cut_mode selected = !strcmp(finishing, "none") ? PT_CUT_NONE :
@@ -469,22 +469,25 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
     }
 }
 
-/* A raster page below the model's physical minimum fails before any output,
- * leaving no uncertain run because page setup was never sent. */
-static void raster_below_min_case(pappl_printer_t *printer, unsigned height)
+/* Render one raster page and reconstruct its physical length: the transmitted
+ * print-area rows plus the feed dots the model restores at each end. The marker
+ * row must land at the same physical row it was submitted at. */
+static void raster_length_case(pappl_printer_t *printer, unsigned height)
 {
-    char path[] = "/tmp/ptouch-batch-short-XXXXXX";
+    char path[] = "/tmp/ptouch-length-raster-XXXXXX";
     int fd = mkstemp(path); assert(fd >= 0);
     cups_raster_t *raster = cupsRasterOpen(fd, CUPS_RASTER_WRITE_PWG); assert(raster);
     cups_page_header2_t header;
     pwg_media_t media = {"custom", NULL, NULL, 1200, (int)height * 2540 / 180};
     assert(cupsRasterInitPWGHeader(&header, &media, "black_1", 180, 180, "one-sided", "normal"));
     header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount] = 0;
-    header.cupsHeight = height;
-    assert(cupsRasterWriteHeader2(raster, &header));
-    unsigned char row[256] = {0}; assert(header.cupsBytesPerLine <= sizeof row);
-    for (unsigned y = 0; y < height; y++)
+    assert(header.cupsHeight == height && cupsRasterWriteHeader2(raster, &header));
+    unsigned char row[128] = {0}; assert(header.cupsBytesPerLine <= sizeof row);
+    for (unsigned y = 0; y < height; y++) {
+        memset(row, 0, header.cupsBytesPerLine);
+        if (y == 100) row[5] = 0x80; /* input dot 40, inside the imageable window */
         assert(cupsRasterWritePixels(raster, row, header.cupsBytesPerLine) == header.cupsBytesPerLine);
+    }
     cupsRasterClose(raster); close(fd);
     char resource[128], uri[256];
     snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
@@ -493,16 +496,77 @@ static void raster_below_min_case(pappl_printer_t *printer, unsigned height)
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "test");
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/pwg-raster");
+    ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
+    add_finishing(request, "none", false);
     reset_wire();
+    pthread_t sink; assert(!pthread_create(&sink, NULL, socket_sink, &sink_listener));
     ipp_t *reply = cupsDoFileRequest(http, request, resource, path); unlink(path);
     assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
     int id = ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0); ippDelete(reply);
+    pthread_join(sink, NULL);
+    pappl_job_t *job = papplPrinterFindJob(printer, id); assert(job);
+    for (unsigned i = 0; i < 1000 && papplJobGetState(job) < IPP_JSTATE_CANCELED; i++) {
+        struct timespec delay = {0, 10000000L}; nanosleep(&delay, NULL);
+    }
+    assert(papplJobGetState(job) == IPP_JSTATE_COMPLETED);
+    unsigned rows = 0; int marker = -1;
+    for (size_t pos = 0; pos < wire_used;) {
+        size_t n = command_size(pos);
+        if (wire[pos] == 'G') {
+            const unsigned char *packed = wire + pos + (is_p710bt() ? 4 : 3);
+            bool ink = false;
+            for (int b = 0; b < 16; b++) ink |= packed[b] != 0;
+            if (ink) marker = (int)rows;
+            rows++;
+        }
+        pos += n;
+    }
+    unsigned feed = is_p710bt() ? PT_END_MARGIN_PX : 0;
+    assert(rows == height - 2 * feed);
+    assert(marker == (int)(100 - feed));
+}
+
+/* Ink inside a row the P710BT replaces with feed fails; a leading end row fails
+ * before any raster leaves, a trailing one after the interior rows are sent.
+ * Either way the run is left uncertain for the documented recovery contract. */
+static void raster_end_ink_case(pappl_printer_t *printer, unsigned ink_row)
+{
+    char path[] = "/tmp/ptouch-endink-raster-XXXXXX";
+    int fd = mkstemp(path); assert(fd >= 0);
+    cups_raster_t *raster = cupsRasterOpen(fd, CUPS_RASTER_WRITE_PWG); assert(raster);
+    cups_page_header2_t header;
+    pwg_media_t media = {"custom", NULL, NULL, 1200, 180 * 2540 / 180};
+    assert(cupsRasterInitPWGHeader(&header, &media, "black_1", 180, 180, "one-sided", "normal"));
+    header.cupsInteger[CUPS_RASTER_PWG_TotalPageCount] = 0;
+    assert(header.cupsHeight == 180 && cupsRasterWriteHeader2(raster, &header));
+    unsigned char row[128] = {0}; assert(header.cupsBytesPerLine <= sizeof row);
+    for (unsigned y = 0; y < 180; y++) {
+        row[5] = y == ink_row ? 0x80 : 0;
+        assert(cupsRasterWritePixels(raster, row, header.cupsBytesPerLine) == header.cupsBytesPerLine);
+    }
+    cupsRasterClose(raster); close(fd);
+    char resource[128], uri[256];
+    snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
+    snprintf(uri, sizeof uri, "ipp://localhost:%d%s", port, resource);
+    ipp_t *request = ippNewRequest(IPP_OP_PRINT_JOB);
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "test");
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/pwg-raster");
+    ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
+    add_finishing(request, "none", false);
+    reset_wire();
+    pthread_t sink; assert(!pthread_create(&sink, NULL, socket_sink, &sink_listener));
+    ipp_t *reply = cupsDoFileRequest(http, request, resource, path); unlink(path);
+    assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
+    int id = ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0); ippDelete(reply);
+    pthread_join(sink, NULL);
     pappl_job_t *job = papplPrinterFindJob(printer, id); assert(job);
     for (unsigned i = 0; i < 1000 && papplJobGetState(job) < IPP_JSTATE_CANCELED; i++) {
         struct timespec delay = {0, 10000000L}; nanosleep(&delay, NULL);
     }
     assert(papplJobGetState(job) == IPP_JSTATE_ABORTED);
-    assert(wire_used == 0 && pt_run_get(printer) == PT_RUN_CLOSED);
+    expect_wire(1, ink_row < PT_END_MARGIN_PX ? 0 : tx(180), 0, 0);
+    assert(pt_run_get(printer) == PT_RUN_UNCERTAIN);
 }
 
 static void counting_png_case(pappl_printer_t *printer, const char *finishing,
@@ -562,12 +626,9 @@ static void check_capabilities(pappl_printer_t *printer)
 
 static void check_media_database(pappl_printer_t *printer)
 {
-    int expected_min = is_p710bt() ? PT_P710BT_MIN_CENTIMM : PT_ROLL_MIN_CENTIMM;
-    int expected_end = is_p710bt() ? PT_END_MARGIN_CENTIMM : 0;
     ipp_t *request = printer_request(printer, IPP_OP_GET_PRINTER_ATTRIBUTES);
-    const char *requested[] = {"media-col-database", "media-size-supported", "media-left-margin-supported", "media-right-margin-supported",
-                               "media-top-margin-supported", "media-bottom-margin-supported"};
-    ippAddStrings(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", 6, NULL, requested);
+    const char *requested[] = {"media-col-database", "media-size-supported", "media-left-margin-supported", "media-right-margin-supported"};
+    ippAddStrings(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", 4, NULL, requested);
     ipp_t *reply = printer_response(printer, request);
     ipp_attribute_t *db = ippFindAttribute(reply, "media-col-database", IPP_TAG_BEGIN_COLLECTION);
     ipp_attribute_t *sizes = ippFindAttribute(reply, "media-size-supported", IPP_TAG_BEGIN_COLLECTION);
@@ -576,9 +637,6 @@ static void check_media_database(pappl_printer_t *printer)
     for (ipp_attribute_t *a = ippFirstAttribute(reply); a; a = ippNextAttribute(reply))
         if (ippGetName(a) && !strcmp(ippGetName(a), "media-col-database")) db_names++;
     assert(db_names == 1);
-    /* End margins are model-wide and must agree with the media entries. */
-    assert(ippContainsInteger(ippFindAttribute(reply, "media-top-margin-supported", IPP_TAG_INTEGER), expected_end));
-    assert(ippContainsInteger(ippFindAttribute(reply, "media-bottom-margin-supported", IPP_TAG_INTEGER), expected_end));
     const int widths[] = {6, 9, 12, 18, 24};
     for (unsigned w = 0; w < 5; w++) {
         pt_geometry g; assert(pt_tape_geometry(widths[w], &g));
@@ -590,11 +648,9 @@ static void check_media_database(pappl_printer_t *printer)
             if (!ippContainsInteger(x, widths[w] * 100)) continue;
             assert(ippGetInteger(ippFindAttribute(col, "media-left-margin", IPP_TAG_INTEGER), 0) == g.left_margin_centimm);
             assert(ippGetInteger(ippFindAttribute(col, "media-right-margin", IPP_TAG_INTEGER), 0) == g.right_margin_centimm);
-            assert(ippGetInteger(ippFindAttribute(col, "media-top-margin", IPP_TAG_INTEGER), 0) == expected_end);
-            assert(ippGetInteger(ippFindAttribute(col, "media-bottom-margin", IPP_TAG_INTEGER), 0) == expected_end);
             ipp_attribute_t *length = ippFindAttribute(size, "y-dimension", IPP_TAG_ZERO); assert(length);
             if (ippGetValueTag(length) == IPP_TAG_RANGE) {
-                int high; assert(ippGetRange(length, 0, &high) == expected_min && high == PT_ROLL_MAX_CENTIMM); roll++;
+                int high; assert(ippGetRange(length, 0, &high) == PT_ROLL_MIN_CENTIMM && high == PT_ROLL_MAX_CENTIMM); roll++;
                 assert(ippGetValueTag(x) == IPP_TAG_RANGE);
                 assert(ippGetRange(x, 0, &high) == widths[w] * 100 - 1 && high == widths[w] * 100 + 1);
             } else {
@@ -606,7 +662,7 @@ static void check_media_database(pappl_printer_t *printer)
         ipp_t *range = ippGetCollection(sizes, w);
         int high;
         assert(ippGetRange(ippFindAttribute(range, "x-dimension", IPP_TAG_RANGE), 0, &high) == widths[w] * 100 - 1 && high == widths[w] * 100 + 1);
-        assert(ippGetRange(ippFindAttribute(range, "y-dimension", IPP_TAG_RANGE), 0, &high) == expected_min && high == PT_ROLL_MAX_CENTIMM);
+        assert(ippGetRange(ippFindAttribute(range, "y-dimension", IPP_TAG_RANGE), 0, &high) == PT_ROLL_MIN_CENTIMM && high == PT_ROLL_MAX_CENTIMM);
         for (int delta = -2; delta <= 2; delta++) {
             ipp_t *q = printer_request(printer, IPP_OP_VALIDATE_JOB);
             ippAddBoolean(q, IPP_TAG_OPERATION, "ipp-attribute-fidelity", true);
@@ -621,22 +677,6 @@ static void check_media_database(pappl_printer_t *printer)
             assert(ippGetStatusCode(response) == (abs(delta) <= 1 ? IPP_STATUS_OK : IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES));
             ippDelete(response);
         }
-    }
-    /* The usable length range rejects a below-minimum explicit page length. */
-    const int length_cases[] = {expected_min, expected_min - 100};
-    for (unsigned i = 0; i < 2; i++) {
-        ipp_t *q = printer_request(printer, IPP_OP_VALIDATE_JOB);
-        ippAddBoolean(q, IPP_TAG_OPERATION, "ipp-attribute-fidelity", true);
-        ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/png");
-        ipp_t *col = ippNew(), *size = ippNew();
-        ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "x-dimension", 1200);
-        ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "y-dimension", length_cases[i]);
-        ippAddCollection(col, IPP_TAG_ZERO, "media-size", size);
-        ippAddCollection(q, IPP_TAG_JOB, "media-col", col); ippDelete(size); ippDelete(col);
-        char resource[128]; snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
-        ipp_t *response = cupsDoRequest(http, q, resource); assert(response);
-        assert(ippGetStatusCode(response) == (i == 0 ? IPP_STATUS_OK : IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES));
-        ippDelete(response);
     }
     ippDelete(reply);
 }
@@ -926,7 +966,7 @@ int main(int argc, char **argv)
     const int tapes[] = {6, 9, 12, 18, 24};
     for (unsigned i = 0; i < sizeof tapes / sizeof tapes[0]; i++) {
         pt_geometry g; pappl_media_col_t media;
-        assert(pt_model_geometry(selected_model, tapes[i], &g) && media_col_for(selected_model, tapes[i], 10000, 180, &media));
+        assert(pt_tape_geometry(tapes[i], &g) && media_col_for(tapes[i], 10000, 180, &media));
         assert(papplPrinterSetReadyMedia(p, 1, &media));
         pappl_job_t *geometry_job = job(p, "none", 1, false);
         pappl_pr_options_t *geometry_options = papplJobCreatePrintOptions(geometry_job, 1, false);
@@ -941,24 +981,8 @@ int main(int argc, char **argv)
         assert(pt_run_get(p) == PT_RUN_CLOSED);
         end(geometry_job, geometry_options, d);
     }
-    /* An explicit P710BT end margin below the required 198 centimm is rejected,
-     * never silently replaced. */
-    if (is_p710bt()) {
-        const int bad_margins[] = {0, PT_END_MARGIN_CENTIMM - 1};
-        for (unsigned m = 0; m < 2; m++) {
-            pappl_job_t *margin_job = job(p, "none", 1, false);
-            pappl_pr_options_t *margin_options = papplJobCreatePrintOptions(margin_job, 1, false);
-            pt_run_set(p, PT_RUN_CLOSED); reset_wire();
-            assert(r_startjob(margin_job, margin_options, d));
-            margin_options->media.top_margin = bad_margins[m];
-            margin_options->media.bottom_margin = PT_END_MARGIN_CENTIMM;
-            assert(!r_startpage(margin_job, margin_options, d, 0) && wire_used == 0);
-            assert(pt_run_get(p) == PT_RUN_CLOSED);
-            end(margin_job, margin_options, d);
-        }
-    }
     pappl_media_col_t original_media;
-    assert(media_col_for(selected_model, 12, 10000, 180, &original_media));
+    assert(media_col_for(12, 10000, 180, &original_media));
     assert(papplPrinterSetReadyMedia(p, 1, &original_media));
 
     /* Invalid/canceled followers before setup preserve a confirmed open run. */
@@ -1174,7 +1198,17 @@ int main(int argc, char **argv)
     pt_run_set(capture, PT_RUN_CLOSED);
     raster_socket_case(capture, "trim", false, 1, 1, 1, CUPS_RASTER_WRITE_PWG, true);
     pt_run_set(capture, PT_RUN_CLOSED); /* Simulate documented explicit recovery. */
-    raster_below_min_case(capture, is_p710bt() ? 173 : 34);
+    /* 36 mm and 50 mm pages reconstruct their physical length and marker row. */
+    raster_length_case(capture, 255);
+    raster_length_case(capture, 354);
+    if (is_p710bt()) {
+        const unsigned end_ink_rows[] = {0, 179}; /* leading and trailing margins */
+        for (unsigned i = 0; i < 2; i++) {
+            pt_run_set(capture, PT_RUN_CLOSED);
+            raster_end_ink_case(capture, end_ink_rows[i]);
+            pt_run_set(capture, PT_RUN_CLOSED); /* Simulate documented explicit recovery. */
+        }
+    }
     pappl_printer_t *counter = papplPrinterCreate(sys, 0, "counter", "brother_ptouch",
                               selected_id, "fixture://counter"); assert(counter);
     counting_png_case(counter, "none", 65, PT_CUT_NONE);

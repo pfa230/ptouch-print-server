@@ -26,7 +26,7 @@
  
    // Validate data...
    if (!validate_defaults(printer, data, data) || !validate_driver(printer, data) || !validate_ready(printer, data, data->num_source, data->media_ready))
-@@ -190,10 +200,34 @@
+@@ -190,10 +200,33 @@
    printer->driver_attrs = make_attrs(printer->system, printer, &printer->driver_data);
  
    if (attrs)
@@ -41,8 +41,7 @@
 +        name = ippGetName(attr);
 +        if (name && (!strncmp(name, "finishings-", 10) || !strcmp(name, "finishing-template-supported") ||
 +                     !strcmp(name, "media-col-database") || !strcmp(name, "media-size-supported") ||
-+                     !strcmp(name, "media-left-margin-supported") || !strcmp(name, "media-right-margin-supported") ||
-+                     !strcmp(name, "media-top-margin-supported") || !strcmp(name, "media-bottom-margin-supported")))
++                     !strcmp(name, "media-left-margin-supported") || !strcmp(name, "media-right-margin-supported")))
 +          while ((old = ippFindAttribute(printer->driver_attrs, name, IPP_TAG_ZERO)) != NULL)
 +            ippDeleteAttribute(printer->driver_attrs, old);
 +      }

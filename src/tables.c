@@ -90,25 +90,3 @@ bool pt_tape_geometry(int tape_mm, pt_geometry *out)
         out->right_margin_centimm = out->margin_centimm;
     return true;
 }
-
-/* The P710BT's raster protocol reserves feed at both page ends; no other
- * implemented model does. */
-static bool model_has_end_margin(const pt_dev *model)
-{
-    return model && model->pid == 0x20af;
-}
-
-bool pt_model_geometry(const pt_dev *model, int tape_mm, pt_geometry *out)
-{
-    if (!model || !pt_tape_geometry(tape_mm, out)) return false;
-    out->min_centimm = PT_ROLL_MIN_CENTIMM;
-    out->max_centimm = PT_ROLL_MAX_CENTIMM;
-    out->pad_below_min = true;
-    if (model_has_end_margin(model)) {
-        out->end_margin_px = PT_END_MARGIN_PX;
-        out->top_margin_centimm = out->bottom_margin_centimm = PT_END_MARGIN_CENTIMM;
-        out->min_centimm = PT_P710BT_MIN_CENTIMM;
-        out->pad_below_min = false;
-    }
-    return true;
-}

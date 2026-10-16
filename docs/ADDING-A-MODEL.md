@@ -81,22 +81,14 @@ were verified by the integrated physical gate; separate-label probes did not
 verify them. Normal resolution and finishing use the existing mode/advanced
 builders and batch lifecycle, without half-cut or cut-every-N commands.
 
-Model-specific physical constraints (required feed ends and usable length range)
-live in one place, `pt_model_geometry` in `src/tables.c`. The P710BT's 14-dot end
-feed and 24.5 mm minimum are applied inside the requested page length, so a new
-model whose protocol adds end feed or a longer minimum must extend that function
-rather than hard-code a subtraction at output.
-
 Direct USB geometry probes on 2026-10-12 used this setup with first-page
 indication 0, normal resolution, autocut, chain-off, and terminal EJECT. The
 operator confirmed complete 52-, 76-, and 120-dot rectangles on 9, 12, and 18 mm
 tape. The existing 32/52/76/120/128-dot table is shared by both supported paths;
 6 and 24 mm remain software/documentation coverage for P710BT. These observations
 establish usable geometry, not integrated finishing, continuation, or recovery
-certification, and they predate the end-margin length correction. That correction
-is verified in software; its physical behavior is left to the operator's separate
-validation and is not certified here. The change's validation summary records
-retained probe evidence and any unavailable files separately.
+certification. The change's validation summary records retained probe evidence
+and any unavailable files separately.
 
 ## Adding the entry
 

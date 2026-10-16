@@ -1,0 +1,2 @@
+/usr/bin/ar qc libptcore.a CMakeFiles/ptcore.dir/src/tables.c.o CMakeFiles/ptcore.dir/src/protocol.c.o CMakeFiles/ptcore.dir/src/raster.c.o CMakeFiles/ptcore.dir/src/status.c.o CMakeFiles/ptcore.dir/src/cutter.c.o
+/usr/bin/ranlib libptcore.a

@@ -45,6 +45,23 @@ static void pt_set_page_length(pappl_pr_options_t *o, int length_centimm)
         o->header.cupsHeight - (unsigned)o->media.bottom_margin * ydpi / 2540 - 1;
 }
 
+/* Physical length (1/100 mm) of `along_tape_px` at `ppi`, or -1 when it exceeds
+ * the roll maximum. CEIL so the header's truncating px conversion round-trips to
+ * exactly along_tape_px; 64-bit because px * 2540 overflows int at ~845k px.
+ * Under-length is clamped UP to the roll minimum, which only adds centred blank
+ * tape; over-length is NOT clamped down, because papplJobFilterImage clips
+ * CENTRED and would silently eat both ends of the design (#19-style fault). */
+static int pt_label_length(int along_tape_px, int ppi)
+{
+    int64_t centimm = ((int64_t)along_tape_px * 2540 + ppi - 1) / ppi;
+
+    if (centimm > PT_ROLL_MAX_CENTIMM)
+        return -1;
+    if (centimm < PT_ROLL_MIN_CENTIMM)
+        centimm = PT_ROLL_MIN_CENTIMM;
+    return (int)centimm;
+}
+
 /* Pin the orientation and report which image axis ends up running along the tape.
  * papplJobFilterImage auto-rotates by comparing the image aspect with the PAGE
  * aspect, which is circular once the page length follows the image: a wide image
@@ -62,11 +79,8 @@ static bool pt_pin_orientation(pappl_pr_options_t *o, int width, int height)
            o->orientation_requested == IPP_ORIENT_REVERSE_LANDSCAPE;
 }
 
-/* Submitted dimensions or a resolved size name suppress the PNG convenience.
- * Returns the requested length in 1/100 mm, or 0 when no concrete length was
- * submitted. The requested value is authoritative even when PAPPL would
- * otherwise substitute a default for an out-of-range request without fidelity. */
-static int pt_requested_length(pappl_job_t *job)
+/* Submitted dimensions or a resolved size name suppress the PNG convenience. */
+static bool pt_explicit_length(pappl_job_t *job)
 {
     ipp_attribute_t *attr = papplJobGetAttribute(job, "media-col");
     if (attr && ippGetValueTag(attr) == IPP_TAG_BEGIN_COLLECTION) {
@@ -76,22 +90,20 @@ static int pt_requested_length(pappl_job_t *job)
         pwg_media_t *media = name ? pwgMediaForPWG(name) : NULL;
         /* PAPPL prefers a collection's size name over its dimensions. */
         if (media && media->length > 0)
-            return media->length;
+            return true;
         ipp_attribute_t *size = ippFindAttribute(col, "media-size", IPP_TAG_BEGIN_COLLECTION);
-        ipp_attribute_t *y = size ? ippFindAttribute(ippGetCollection(size, 0), "y-dimension", IPP_TAG_INTEGER) : NULL;
-        if (y)
-            return ippGetInteger(y, 0);
+        if (size && ippFindAttribute(ippGetCollection(size, 0), "y-dimension", IPP_TAG_INTEGER))
+            return true;
     }
     attr = papplJobGetAttribute(job, "media");
     const char *name = attr ? ippGetString(attr, 0, NULL) : NULL;
     pwg_media_t *media = name ? pwgMediaForPWG(name) : NULL;
-    return media && media->length > 0 ? media->length : 0;
+    return media && media->length > 0;
 }
 
 /* Preflight the oriented physical content before PAPPL's centered placement can
- * clip it. A full page canvas may include blank physical margins on the
- * cross-tape edges and, on a model with feed ends, along the tape; compact only
- * those verified strips, keeping the same orientation, DPI, and content. */
+ * clip it. A full tape canvas may include blank physical margins; compact only
+ * those verified margins, keeping the same orientation, DPI, and content. */
 static bool pt_preflight_png(pappl_job_t *job, pappl_pr_options_t *o,
                              unsigned char *pixels, int *width, int *height,
                              int depth, int ppi, bool landscape)
@@ -100,8 +112,7 @@ static bool pt_preflight_png(pappl_job_t *job, pappl_pr_options_t *o,
         return true; /* Explicit standard scaling remains PAPPL's responsibility. */
 
     pt_geometry g;
-    if (!pt_model_geometry(pt_printer_model(papplJobGetPrinter(job)),
-                           (o->media.size_width + 50) / 100, &g))
+    if (!pt_tape_geometry((o->media.size_width + 50) / 100, &g))
         return false;
     int cross = landscape ? *height : *width;
     int along = landscape ? *width : *height;
@@ -111,72 +122,32 @@ static bool pt_preflight_png(pappl_job_t *job, pappl_pr_options_t *o,
         (o->media.top_margin + o->media.bottom_margin) * PT_DEFAULT_PPI / 2540;
     int printable = (int)o->header.cupsWidth -
         (o->media.left_margin + o->media.right_margin) * PT_DEFAULT_PPI / 2540;
-    if (along_px < 1 || cross_px < 1) {
-        papplJobSetMessage(job, "PNG content is empty");
+    if (along_px < 1 || cross_px < 1 || along_px > available) {
+        papplJobSetMessage(job, "PNG content needs %d along-tape dots; page allows %d", along_px, available);
         goto reject;
     }
-
-    /* Cross-tape: content already inside the imageable window, or a full
-     * nominal-width canvas whose physical edges are blank. */
-    bool compact_cross = false;
-    if (cross_px <= g.imageable_px && cross_px <= printable) {
-        /* Fits as-is. */
-    } else if (cross_px == g.nominal_px) {
-        compact_cross = true;
-    } else {
+    if (cross_px <= g.imageable_px && cross_px <= printable)
+        return true;
+    if (cross_px != g.nominal_px) {
         papplJobSetMessage(job, "PNG content is %d dots across tape; printable width is %d", cross_px,
                            printable < g.imageable_px ? printable : g.imageable_px);
         goto reject;
     }
 
-    /* Along the tape: a full page canvas may carry the model's blank feed ends. */
-    bool compact_along = false;
-    if (along_px > available) {
-        if (g.end_margin_px && along_px == (int)o->header.cupsHeight) {
-            compact_along = true;
-        } else {
-            papplJobSetMessage(job, "PNG content needs %d along-tape dots; page allows %d", along_px, available);
-            goto reject;
-        }
-    }
-    if (!compact_cross && !compact_along)
-        return true;
-
-    int c0 = 0, c1 = cross, a0 = 0, a1 = along;
-    if (compact_cross) {
-        bool reverse = o->orientation_requested == IPP_ORIENT_REVERSE_PORTRAIT ||
-                       o->orientation_requested == IPP_ORIENT_REVERSE_LANDSCAPE;
-        int first_dot = reverse ? g.nominal_px - g.right_px : g.left_px;
-        int last_dot = first_dot + g.imageable_px;
-        c0 = (int)(((int64_t)first_dot * ppi + PT_DEFAULT_PPI - 1) / PT_DEFAULT_PPI);
-        c1 = (int)((int64_t)last_dot * ppi / PT_DEFAULT_PPI);
-        if (c0 >= c1 || (int64_t)(c1 - c0) * PT_DEFAULT_PPI / ppi > printable) {
-            papplJobSetMessage(job, "PNG content does not fit the selected media margins");
-            goto reject;
-        }
-    }
-    if (compact_along) {
-        a0 = (int)(((int64_t)g.end_margin_px * ppi + PT_DEFAULT_PPI - 1) / PT_DEFAULT_PPI);
-        a1 = along - (int)((int64_t)g.end_margin_px * ppi / PT_DEFAULT_PPI);
-        if (a0 >= a1) {
-            papplJobSetMessage(job, "PNG content does not fit the selected media margins");
-            goto reject;
-        }
-    }
-
-    /* Cross runs along one axis and feed ends along the other. */
-    int r0, r1, x0, x1;
-    if (landscape) {
-        r0 = compact_cross ? c0 : 0; r1 = compact_cross ? c1 : *height;
-        x0 = a0; x1 = a1;
-    } else {
-        r0 = a0; r1 = a1;
-        x0 = compact_cross ? c0 : 0; x1 = compact_cross ? c1 : *width;
+    bool reverse = o->orientation_requested == IPP_ORIENT_REVERSE_PORTRAIT ||
+                   o->orientation_requested == IPP_ORIENT_REVERSE_LANDSCAPE;
+    int first_dot = reverse ? g.nominal_px - g.right_px : g.left_px;
+    int last_dot = first_dot + g.imageable_px;
+    int first = (int)(((int64_t)first_dot * ppi + PT_DEFAULT_PPI - 1) / PT_DEFAULT_PPI);
+    int last = (int)((int64_t)last_dot * ppi / PT_DEFAULT_PPI);
+    if (first >= last || (int64_t)(last - first) * PT_DEFAULT_PPI / ppi > printable) {
+        papplJobSetMessage(job, "PNG content does not fit the selected media margins");
+        goto reject;
     }
     for (int y = 0; y < *height; y++) {
-        bool row_kept = y >= r0 && y < r1;
         for (int x = 0; x < *width; x++) {
-            if (row_kept && x >= x0 && x < x1)
+            int pos = landscape ? y : x;
+            if (pos >= first && pos < last)
                 continue;
             for (int c = 0; c < depth; c++) {
                 if (pixels[((size_t)y * *width + x) * depth + c] != 255) {
@@ -186,13 +157,17 @@ static bool pt_preflight_png(pappl_job_t *job, pappl_pr_options_t *o,
             }
         }
     }
-    int nrows = r1 - r0, ncols = x1 - x0;
-    for (int i = 0; i < nrows; i++)
-        memmove(pixels + (size_t)i * ncols * depth,
-                pixels + ((size_t)(r0 + i) * *width + x0) * depth,
-                (size_t)ncols * depth);
-    *height = nrows;
-    *width = ncols;
+    if (landscape) {
+        memmove(pixels, pixels + (size_t)first * *width * depth,
+                (size_t)(last - first) * *width * depth);
+        *height = last - first;
+    } else {
+        for (int y = 0; y < *height; y++)
+            memmove(pixels + (size_t)y * (last - first) * depth,
+                    pixels + ((size_t)y * *width + first) * depth,
+                    (size_t)(last - first) * depth);
+        *width = last - first;
+    }
     return true;
 
 reject:
@@ -317,39 +292,17 @@ bool pt_filter_png(pappl_job_t *job, pappl_device_t *device, void *data)
     landscape = pt_pin_orientation(storage->options, width, height);
     along_tape_px = landscape ? width : height;
 
-    /* The model's usable range and feed ends come from one geometry definition;
-     * derive the auto length from the original canvas before any compaction. */
-    pt_geometry g;
-    if (!pt_model_geometry(pt_printer_model(papplJobGetPrinter(job)),
-                           (storage->options->media.size_width + 50) / 100, &g)) {
-        papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
-        papplJobSetMessage(job, "PNG media width does not match a supported tape");
-        goto finish_png;
-    }
-    int requested = pt_requested_length(job);
-    bool explicit_length = requested > 0;
-    if (explicit_length) {
-        length_centimm = storage->options->media.size_length;
-        /* The client's requested length stays authoritative: a below-minimum or
-         * over-maximum request fails rather than being padded to another size,
-         * even when PAPPL substituted a default for an out-of-range value. */
-        if (requested < g.min_centimm || requested > g.max_centimm)
-            length_centimm = requested < g.min_centimm ? -2 : -1;
-    } else {
-        int64_t raw = ((int64_t)along_tape_px * 2540 + ppi - 1) / ppi;
-        length_centimm = raw > g.max_centimm ? -1 :
-                         raw < g.min_centimm ? (g.pad_below_min ? g.min_centimm : -2) : (int)raw;
-    }
+    bool explicit_length = pt_explicit_length(job);
+    length_centimm = explicit_length ? storage->options->media.size_length : pt_label_length(along_tape_px, ppi);
     if (length_centimm < 0) {
-        int shown = explicit_length ? requested : (int)(((int64_t)along_tape_px * 2540 + ppi - 1) / ppi);
         papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
-        if (length_centimm == -1)
-            papplJobSetMessage(job, "label too long: %d.%02d mm (max %d.%02d mm)",
-                               shown / 100, shown % 100, g.max_centimm / 100, g.max_centimm % 100);
-        else
-            papplJobSetMessage(job, "label too short: %d.%02d mm (min %d.%02d mm)",
-                               shown / 100, shown % 100, g.min_centimm / 100, g.min_centimm % 100);
-        papplLogJob(job, PAPPL_LOGLEVEL_ERROR, "%s", papplJobGetMessage(job));
+        papplJobSetMessage(job, "label too long: %d px at %d dpi needs %d.%02d mm (max %d mm)",
+                           along_tape_px, ppi, along_tape_px * 2540 / ppi / 100,
+                           along_tape_px * 2540 / ppi % 100, PT_ROLL_MAX_CENTIMM / 100);
+        papplLogJob(job, PAPPL_LOGLEVEL_ERROR,
+                    "label too long: %d px at %d dpi needs %d.%02d mm (max %d mm)",
+                    along_tape_px, ppi, along_tape_px * 2540 / ppi / 100,
+                    along_tape_px * 2540 / ppi % 100, PT_ROLL_MAX_CENTIMM / 100);
         goto finish_png;
     }
 

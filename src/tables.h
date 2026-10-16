@@ -28,32 +28,12 @@ const pt_dev *pt_lookup_name(const char *name);
 /* Imageable px for a tape width in mm; 0 if unknown. */
 int pt_tape_px(int mm);
 
-/* Roll length range, in 1/100 mm, advertised in media-col. */
-#define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
-#define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
-
-/* PT-P710BT reserves 14 dots of feed at each end of every page; 198 is the
- * smallest integral 1/100 mm that still maps back to 14 dots at 180 dpi. */
-#define PT_END_MARGIN_PX 14
-#define PT_END_MARGIN_CENTIMM 198
-/* Documented minimum physical feed length for a P710BT label. */
-#define PT_P710BT_MIN_CENTIMM 2450
-
 /* Canonical 180dpi window shared by the supported models. right_px is exclusive;
- * margin_centimm is the physical minimum, with pixel-aligned published margins.
- * `pt_model_geometry` adds the model's end feed and usable length range. */
+ * margin_centimm is the physical minimum, with pixel-aligned published margins. */
 typedef struct {
     int nominal_px, imageable_px, left_px, right_px, margin_centimm;
     int left_margin_centimm, right_margin_centimm;
-    int end_margin_px;          /* feed dots reserved at each tape end */
-    int top_margin_centimm, bottom_margin_centimm;  /* published end margins */
-    int min_centimm, max_centimm;   /* usable physical page length */
-    bool pad_below_min;         /* legacy PNG 5 mm padding vs. reject */
 } pt_geometry;
 bool pt_tape_geometry(int tape_mm, pt_geometry *out);
-
-/* Model-aware geometry: tape window plus the selected model's end margins and
- * usable length range. One definition used by publication, preflight, output. */
-bool pt_model_geometry(const pt_dev *model, int tape_mm, pt_geometry *out);
 
 #endif /* PT_TABLES_H */

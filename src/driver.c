@@ -206,7 +206,7 @@ static void pt_finishing_attrs(ipp_t *attrs)
 }
 
 /* Defined below with status_cb; forward-declared for the #38 live read in r_startjob. */
-static bool media_col_for(const pt_dev *model, int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out);
+static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out);
 
 /* The queue owns its state; PAPPL serializes jobs, while status may run on
  * another thread. Never call PAPPL APIs with this mutex held. */
@@ -223,12 +223,6 @@ static pt_printer_state *pt_state(pappl_printer_t *printer)
     pappl_pr_driver_data_t data;
     papplPrinterGetDriverData(printer, &data);
     return data.extension;
-}
-
-const pt_dev *pt_printer_model(pappl_printer_t *printer)
-{
-    pt_printer_state *state = pt_state(printer);
-    return state ? state->model : NULL;
 }
 
 static pt_run pt_run_get(pappl_printer_t *printer)
@@ -370,33 +364,23 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     (void)p;
     pt_batch *b = papplJobGetData(j);
     if (!b || b->failed || b->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
-    pappl_printer_t *printer = papplJobGetPrinter(j);
-    const pt_dev *model = pt_state(printer)->model;
     pt_geometry g;
-    if (!pt_model_geometry(model, b->tape_mm, &g)) return pt_fail_job(j);
-    /* Reject a page below the model's physical minimum; legacy padding models
-     * accept the header that the truncated minimum conversion produces. */
-    int min_rows = g.pad_below_min ? g.min_centimm * 180 / 2540
-                                   : (g.min_centimm * 180 + 2540 - 1) / 2540;
-    int max_rows = g.max_centimm * 180 / 2540;
-    if (o->header.HWResolution[0] != 180 ||
+    if (!pt_tape_geometry(b->tape_mm, &g) || o->header.HWResolution[0] != 180 ||
         o->header.HWResolution[1] != 180 || o->header.cupsBitsPerPixel != 1 ||
         !pt_page_width_matches(o, &g, b->tape_mm) ||
-        (int)o->header.cupsHeight < min_rows || (int)o->header.cupsHeight > max_rows) {
+        o->header.cupsHeight < PT_ROLL_MIN_CENTIMM * 180 / 2540 ||
+        o->header.cupsHeight > PT_ROLL_MAX_CENTIMM * 180 / 2540) {
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         papplJobSetMessage(j, "Page geometry does not match loaded %d mm tape at 180 dpi", b->tape_mm);
         return pt_fail_job(j);
     }
     int left = o->media.left_margin * 180 / 2540;
     int span = (int)o->header.cupsWidth - (o->media.left_margin + o->media.right_margin) * 180 / 2540;
-    int top = o->media.top_margin * 180 / 2540;
-    int bottom = o->media.bottom_margin * 180 / 2540;
-    if (left < g.left_px || span <= 0 || left + span > g.right_px ||
-        top < g.end_margin_px || bottom < g.end_margin_px ||
-        top + bottom >= (int)o->header.cupsHeight) {
+    if (left < g.left_px || span <= 0 || left + span > g.right_px) {
         papplJobSetMessage(j, "Selected margins extend beyond the physical printable window");
         return pt_fail_job(j);
     }
+    pappl_printer_t *printer = papplJobGetPrinter(j);
     /* Page setup is sent only after validating the actual page, never a stale
      * default header. Keep a healthy preceding run if validation rejected it. */
     pt_run run = pt_run_get(printer);
@@ -404,7 +388,8 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     if (b->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
     bool continuation = pt_chain_get(printer);
     pt_run_set(printer, PT_RUN_UNCERTAIN);
-    bool p710bt = g.end_margin_px != 0;
+    const pt_dev *model = pt_state(printer)->model;
+    bool p710bt = model->pid == 0x20af;
     uint8_t buf[100];
     if (b->first_label &&
         ((!continuation && p710bt && !pt_dev_write(d, buf, pt_cmd_invalidate(buf))) ||
@@ -412,16 +397,16 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
          !pt_dev_write(d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
          (p710bt && !pt_dev_write(d, buf, pt_cmd_auto_status(buf, true)))))
         return pt_fail_job(j);
-    /* Logical page length stays whole; only the transmitted print area shrinks
-     * by the feed margins the hardware replaces at each end. */
+    /* The logical page stays whole; only the transmitted print area shrinks by
+     * the feed the hardware replaces at each end, so the feed is counted once. */
     size_t info_len = p710bt ? pt_cmd_printinfo_extended(buf, b->tape_mm,
-                             o->header.cupsHeight - 2u * (unsigned)g.end_margin_px,
+                             o->header.cupsHeight - 2u * PT_END_MARGIN_PX,
                              b->first_label && !continuation ? 0 : 1) :
                              pt_cmd_printinfo(buf, b->tape_mm);
     if (!pt_dev_write(d, buf, info_len) ||
         !pt_dev_write(d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
         !pt_dev_write(d, buf, pt_cmd_setadvanced(buf, 0)) ||
-        (p710bt && (!pt_dev_write(d, buf, pt_cmd_margin(buf, g.end_margin_px)) ||
+        (p710bt && (!pt_dev_write(d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
                    !pt_dev_write(d, buf, pt_cmd_compression(buf, 2)))))
         return pt_fail_job(j);
     b->first_label = false;
@@ -430,18 +415,19 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
 }
 
 /* One delivered scanline is one cross-tape Brother raster line (M0 Probe B).
- * Physical end margins are replaced by hardware feed, so those logical rows are
- * verified blank and not transmitted; all other rows are consumed and packed. */
+ * On a P710BT the first and last 14 logical rows are replaced by hardware feed:
+ * those rows are verified blank and not transmitted, every other row is. */
 static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned y, const unsigned char *l)
 {
     pt_batch *batch = papplJobGetData(j);
     if (!batch || batch->failed || !batch->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
     pt_geometry g;
-    if (!pt_model_geometry(pt_state(papplJobGetPrinter(j))->model, batch->tape_mm, &g) ||
+    if (!pt_tape_geometry(batch->tape_mm, &g) ||
         !pt_page_width_matches(o, &g, batch->tape_mm))
         return pt_fail_job(j);
-    unsigned end = (unsigned)g.end_margin_px;
-    if (end && (y < end || y >= o->header.cupsHeight - end)) {
+    const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
+    if (model->pid == 0x20af &&
+        (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= o->header.cupsHeight)) {
         for (unsigned i = 0; i < o->header.cupsBytesPerLine; i++)
             if (l[i]) {
                 papplJobSetMessage(j, "Raster ink in a physical end margin that hardware feed replaces");
@@ -451,7 +437,6 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     }
     uint8_t packed[16], buf[24];
     pt_pack_window(packed, l, g.left_px, g.imageable_px);
-    const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
                     pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
                     pt_cmd_sendraster(buf, packed, sizeof packed);
@@ -525,19 +510,16 @@ static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     return result;
 }
 
-/* Publish nominal tape dimensions with pixel-aligned physical margins and the
- * selected model's required end margins. */
-static bool media_col_for(const pt_dev *model, int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out)
+/* Publish nominal tape dimensions with pixel-aligned physical margins. */
+static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out)
 {
     memset(out, 0, sizeof *out);
     pt_geometry g;
-    if (dpi != 180 || !pt_model_geometry(model, tape_mm, &g)) return false;
+    if (dpi != 180 || !pt_tape_geometry(tape_mm, &g)) return false;
     out->size_width = tape_mm * 100;
     out->size_length = length_centimm;
     out->left_margin = g.left_margin_centimm;
     out->right_margin = g.right_margin_centimm;
-    out->top_margin = g.top_margin_centimm;
-    out->bottom_margin = g.bottom_margin_centimm;
     pwgFormatSizeName(out->size_name, sizeof(out->size_name), NULL, NULL,
                       out->size_width, length_centimm, "mm");
     strncpy(out->source, "main-roll", sizeof(out->source) - 1);
@@ -548,29 +530,24 @@ static bool media_col_for(const pt_dev *model, int tape_mm, int length_centimm, 
 
 /* PAPPL's generated database applies one printer-wide minimum to every
  * size. Standard clients need the cassette's actual margins, including custom
- * lengths and the model's required end margins, before rendering a page that
- * the physical guard can accept. */
-static void pt_media_attrs(const pt_dev *model, ipp_t *attrs)
+ * lengths, before rendering a page that the physical guard can accept. */
+static void pt_media_attrs(ipp_t *attrs)
 {
     ipp_t *database[PT_MAX_MEDIA_NAMES], *sizes[sizeof pt_tape_mm / sizeof pt_tape_mm[0]];
     int left[sizeof pt_tape_mm / sizeof pt_tape_mm[0]], right[sizeof pt_tape_mm / sizeof pt_tape_mm[0]];
-    int ncols = 0, nwidths = 0, top_margin = 0, bottom_margin = 0;
-    int min_centimm = PT_ROLL_MIN_CENTIMM;
+    int ncols = 0, nwidths = 0;
     const int presets = (int)(sizeof pt_preset_mm / sizeof pt_preset_mm[0]);
     for (size_t i = 0; i < sizeof pt_tape_mm / sizeof pt_tape_mm[0]; i++) {
         pt_geometry geometry;
-        if (!pt_model_geometry(model, pt_tape_mm[i], &geometry)) continue;
+        if (!pt_tape_geometry(pt_tape_mm[i], &geometry)) continue;
         left[nwidths] = geometry.left_margin_centimm;
         right[nwidths] = geometry.right_margin_centimm;
-        top_margin = geometry.top_margin_centimm;
-        bottom_margin = geometry.bottom_margin_centimm;
-        min_centimm = geometry.min_centimm;
         sizes[nwidths] = ippNew();
         ippAddRange(sizes[nwidths], IPP_TAG_ZERO, "x-dimension", pt_tape_mm[i] * 100 - 1, pt_tape_mm[i] * 100 + 1);
-        ippAddRange(sizes[nwidths], IPP_TAG_ZERO, "y-dimension", min_centimm, PT_ROLL_MAX_CENTIMM);
+        ippAddRange(sizes[nwidths], IPP_TAG_ZERO, "y-dimension", PT_ROLL_MIN_CENTIMM, PT_ROLL_MAX_CENTIMM);
         for (int k = 0; k <= presets; k++) {
             pappl_media_col_t media;
-            media_col_for(model, pt_tape_mm[i], k < presets ? pt_preset_mm[k] * 100 : min_centimm, 180, &media);
+            media_col_for(pt_tape_mm[i], k < presets ? pt_preset_mm[k] * 100 : PT_ROLL_MIN_CENTIMM, 180, &media);
             ipp_t *col = ippNew(), *size = k == presets ? sizes[nwidths] : ippNew();
             if (k < presets) {
                 ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "x-dimension", media.size_width);
@@ -581,8 +558,8 @@ static void pt_media_attrs(const pt_dev *model, ipp_t *attrs)
             if (k < presets) ippDelete(size);
             ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-left-margin", media.left_margin);
             ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-right-margin", media.right_margin);
-            ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-top-margin", media.top_margin);
-            ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-bottom-margin", media.bottom_margin);
+            ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-top-margin", 0);
+            ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-bottom-margin", 0);
             ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, "media-source", NULL, media.source);
             ippAddString(col, IPP_TAG_ZERO, IPP_TAG_KEYWORD, "media-type", NULL, media.type);
             database[ncols++] = col;
@@ -605,9 +582,6 @@ static void pt_media_attrs(const pt_dev *model, ipp_t *attrs)
             if (!n || margins[side][i] != margins[side][n - 1]) margins[side][n++] = margins[side][i];
         ippAddIntegers(attrs, IPP_TAG_PRINTER, IPP_TAG_INTEGER, names[side], n, margins[side]);
     }
-    /* Required end margins are model-wide; the bridge carries them like left/right. */
-    ippAddInteger(attrs, IPP_TAG_PRINTER, IPP_TAG_INTEGER, "media-top-margin-supported", top_margin);
-    ippAddInteger(attrs, IPP_TAG_PRINTER, IPP_TAG_INTEGER, "media-bottom-margin-supported", bottom_margin);
     for (int i = 0; i < ncols; i++) ippDelete(database[i]);
     for (int i = 0; i < nwidths; i++) ippDelete(sizes[i]);
 }
@@ -631,7 +605,7 @@ static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live)
         pappl_media_col_t media;
         pappl_pr_driver_data_t data;
         papplPrinterGetDriverData(printer, &data);
-        if (media_col_for(pt_state(printer)->model, live.st.tape_mm, 10000, data.x_default, &media) &&
+        if (media_col_for(live.st.tape_mm, 10000, data.x_default, &media) &&
             papplPrinterSetReadyMedia(printer, 1, &media)) {
             if (data.media_ready[0].size_width != media.size_width)
                 pt_chain_set(printer, false);
@@ -777,12 +751,9 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     data->x_resolution[0] = data->y_resolution[0] = dpi;
     data->x_default = data->y_default = dpi;
     /* One lower bound must admit every advertised cassette. Per-tape margins
-     * still constrain the actual physical window. The model's required end
-     * margins are model-wide. */
-    pt_geometry geometry;
-    if (!pt_model_geometry(dev, 12, &geometry)) return false;
+     * still constrain the actual physical window. */
     data->left_right = 53;
-    data->bottom_top = geometry.top_margin_centimm;
+    data->bottom_top = 0;
 
     data->num_source = 1; data->source[0] = "main-roll";
     data->num_type = 1; data->type[0] = "labels";
@@ -811,10 +782,10 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
             data->media[n] = g_media_names[n]; n++;
         }
     }
-    /* One roll range across the full width span and the model's usable length. */
+    /* One roll range across the full width span and 5..300mm length. */
     if (max_w100 > 0 && n + 2 <= PT_MAX_MEDIA_NAMES) {
         pwgFormatSizeName(g_media_names[n], PT_MEDIA_NAME_LEN, "roll", "min",
-                          min_w100, geometry.min_centimm, "mm");
+                          min_w100, PT_ROLL_MIN_CENTIMM, "mm");
         data->media[n] = g_media_names[n]; n++;
         pwgFormatSizeName(g_media_names[n], PT_MEDIA_NAME_LEN, "roll", "max",
                           max_w100, PT_ROLL_MAX_CENTIMM, "mm");
@@ -825,9 +796,9 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     /* Safe fixed default: 12mm x 100mm. status_cb republishes media_ready as the
      * live-loaded width once the tape is read (Codex #2). */
     pappl_media_col_t mc;
-    media_col_for(dev, 12, 10000, dpi, &mc);
+    media_col_for(12, 10000, dpi, &mc);
     data->media_default = mc;
     data->media_ready[0] = mc;
-    pt_media_attrs(dev, *driver_attrs);
+    pt_media_attrs(*driver_attrs);
     return true;
 }

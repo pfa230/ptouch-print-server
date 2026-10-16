@@ -18,9 +18,8 @@ receive print output.
 
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.
-- Treats the requested length as the complete physical label. The P710BT's
-  required 14-dot end feed is accounted for inside that length rather than added
-  to it, and a page shorter than its 24.5 mm physical minimum is rejected.
+- Counts the P710BT's 14-dot feed per end inside the requested page length rather
+  than adding it, and fails a page whose ink reaches a replaced end row.
 - Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
   match the tape they actually loaded.
 - Uses standard IPP **finishings** for cuts between labels and at batch end,
@@ -126,25 +125,14 @@ tape is refused before raster output. The default `print-scaling=none` preserves
 physical size; explicit standard scaling requests use PAPPL's placement policy.
 The server does not silently choose fit or crop to rescue a mismatched design.
 
-Page length is the complete physical label. PT-2730 accepts 5 to 300 mm. The
-PT-P710BT requires at least 24.5 mm and at most 300 mm, and its media-ready,
-media-default, and media-col-database entries publish its required 14-dot
-(1.98 mm) top and bottom end margins alongside the tape's left/right margins. A
-page length below the model's minimum, or an explicit end margin below the
-required one, is refused before page setup rather than padded to a longer label.
-For the PT-P710BT the driver sends only the print-area rows; the 14-dot hardware
-feed at each end completes the requested physical length.
-
 For PNG at `print-scaling=none`, use the printer's 180 dpi resolution. PNGs
 without resolution metadata are interpreted as 180 dpi; square DPI metadata
 sets the physical size, while non-square DPI is rejected. Cross-tape content
 must fit the imageable width (32, 52, 76, 120, or 128 printer dots respectively).
 A full nominal-width canvas is also accepted when its non-imageable edge
-margins are entirely white after transparency is composited. On the PT-P710BT a
-full-page canvas is likewise accepted when its blank end margins match the
-printer's feed, which is accounted for once inside the total length; nonblank
-required end margins, oversized content, or content longer than an explicitly
-selected page are rejected before page raster rather than silently clipped.
+margins are entirely white after transparency is composited. Nonblank physical
+margins, oversized content, or content longer than an explicitly selected page
+are rejected before page raster rather than silently clipped.
 
 An explicit named `media` size, `media-col.media-size-name`, or
 `media-col.media-size.y-dimension` determines
@@ -152,11 +140,10 @@ PNG page length. For example, a 180-pixel image at 180 dpi on explicitly selecte
 50 mm media prints a 50 mm page, with centered content. If concrete length is
 omitted, PNG length follows its oriented along-tape pixel dimension and DPI.
 Source-only or margin-only `media-col` does not suppress that convenience.
-Automatic lengths below 5 mm are padded to 5 mm and lengths above 300 mm are
-refused; on the PT-P710BT an automatic or explicit length below its 24.5 mm
-minimum is refused instead. PNG's automatic orientation uses portrait for
-tall/square images and reverse-landscape (90 degrees clockwise) for wide images.
-Explicit standard `orientation-requested` overrides it.
+Automatic lengths below 5 mm are padded to 5 mm; lengths above 300 mm are refused.
+PNG's automatic orientation uses portrait for tall/square images and
+reverse-landscape (90 degrees clockwise) for wide images. Explicit standard
+`orientation-requested` overrides it.
 
 JPEG uses PAPPL's standard image placement and selected/default media length,
 without PNG's automatic-length convenience or source-content preflight. Standard
@@ -168,10 +155,6 @@ Custom lengths also use standard `media-col` dimensions. The roll declarations
 accept width rounding of ±0.01 mm around each nominal tape width for CUPS custom
 sizes; this does not permit selecting another cassette or enlarging its physical
 printable window. The submitted length and explicit margins remain authoritative.
-The published P710BT length range and end margins follow the selected model, so
-refresh an existing queue after changing models: delete and recreate it, or
-reload its cached media (for example, restart the queue and re-run
-`lpoptions -p <queue>`) so a client no longer renders with stale zero end margins.
 
 CUPS 2.4's generated PPD has one custom-size margin for all tapes. It chooses the
 largest advertised margins, so `media=Custom.12x40mm` leaves only about 42 printable
@@ -238,23 +221,22 @@ followed by server restart, as described below.
 The finishing contract and canonical 32/52/76/120/128-dot tape windows are shared
 by both implemented models. PT-2730 retains its legacy eight-byte print
 information and uncompressed rows. PT-P710BT uses `ESC i a` raster mode,
-automatic status notification, thirteen-byte `ESC i z` print information, a
-14-dot feed margin parameter, and TIFF PackBits rows. Its `ESC i z` declares the
-transmitted print-area row count, which is the requested logical page height
-minus the 28 dots of end feed whose blank boundary rows the driver verifies and
-does not transmit. Its first page has indication 0 on a freshly initialized closed
-run; later pages and healthy cross-batch continuation use 1. Only a fresh P710BT
-run sends the 100-byte invalidation and initialization; continuation sends
-neither. Finalization still uses deferred FF or late chain-off/EJECT for both
-models.
+automatic status notification, thirteen-byte `ESC i z` print information with
+the transmitted print-area row count, a 14-dot feed margin, and TIFF PackBits
+rows. The print-area count is the requested logical page height minus the 28
+dots of end feed; those blank boundary rows are verified and not transmitted, so
+the feed is counted once and ink in a replaced end row fails the job. Its first
+page has indication 0 on a freshly initialized closed run; later pages and
+healthy cross-batch continuation use 1. Only a fresh P710BT run sends the
+100-byte invalidation and initialization; continuation sends neither.
+Finalization still uses deferred FF or late chain-off/EJECT for both models.
 The P710BT integrated [hardware gate](tests/P710BT-ACCEPTANCE.md) passed all four
 finishing policies, held-run continuation, wrong-media rejection, offline queue
 recovery, and explicit uncertain-output recovery. It used 15 complete labels,
-including four operator-requested repeat labels, and predates the end-margin
-length correction. Direct geometry probes remain separate evidence; 6/24 mm have
-software coverage only. The length correction described above is verified in
-software; its physical behavior is left to the operator's separate validation and
-is not claimed by that earlier gate.
+including four operator-requested repeat labels, and predates the end-feed length
+correction above. That correction is verified in software only; its physical
+behavior is left to the operator's separate validation. Direct geometry probes
+remain separate evidence; 6/24 mm have software coverage only.
 
 ## Configuration
 
