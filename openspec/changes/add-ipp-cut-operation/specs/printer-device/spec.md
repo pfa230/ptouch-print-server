@@ -4,7 +4,7 @@
 
 ### Requirement: Direct IPP cut action
 
-PT-P710BT queues SHALL advertise and accept project-local Ptouch-Cut (0x5f01) under the configured access policy. It SHALL release healthy held user content without a submitted document, IPP job, or replay. An internal one-white-row continuation is permitted; visible content SHALL NOT be printed. PT-2730 SHALL neither advertise nor implement the action. No user feed-length or force parameter SHALL be added.
+PT-P710BT queues SHALL advertise and accept project-local Ptouch-Cut (0x5f01) using the same printing authorization as Print-Job/Create-Job, evaluated before device acquisition. Any client allowed to print SHALL be allowed to cut, including remote clients when no authentication service or callback is configured; configured authentication and print-group checks SHALL apply equally to printing and cutting, without an administrator-only restriction. It SHALL release healthy held user content without a submitted document, IPP job, or replay. An internal one-white-row continuation is permitted; visible content SHALL NOT be printed. PT-2730 SHALL neither advertise nor implement the action. No user feed-length or force parameter SHALL be added.
 
 #### Scenario: Release the last chain label
 - **WHEN** an authorized client sends Ptouch-Cut to an idle P710BT holding the last label of a healthy chain
@@ -22,8 +22,12 @@ PT-P710BT queues SHALL advertise and accept project-local Ptouch-Cut (0x5f01) un
 - **WHEN** a PT-2730 queue is queried or receives Ptouch-Cut
 - **THEN** discovery omits 0x5f01, the action returns server-error-operation-not-supported without device output, and ordinary printing remains unchanged
 
+#### Scenario: Remote client without authentication
+- **WHEN** PAPPL classifies a client as a non-localhost network peer and no authentication service or callback is configured
+- **THEN** both Print-Job and Ptouch-Cut are authorized under the same printing policy, without requiring administrator access
+
 #### Scenario: Invalid or unauthorized request
-- **WHEN** the request contains document data or job attributes, lacks a valid printer target, or fails the configured access policy
+- **WHEN** the request contains document data or job attributes, lacks a valid printer target, or fails the configured printing authorization shared with Print-Job/Create-Job
 - **THEN** it is rejected with an appropriate IPP or HTTP error before device output
 
 ### Requirement: Direct cuts use exclusive device access
