@@ -1390,7 +1390,9 @@ int main(int argc, char **argv)
     reset_wire(); pthread_t queued_sink;
     assert(!pthread_create(&queued_sink, NULL, socket_sink, &sink_listener));
     papplPrinterResume(capture);
-    for (int i = 0; i < 1000 && papplJobGetState(follower) < IPP_JSTATE_CANCELED; i++) {
+    /* PAPPL starts the newest pending job first, so either may finish last. */
+    for (int i = 0; i < 1000 && (papplJobGetState(first) < IPP_JSTATE_CANCELED ||
+                                 papplJobGetState(follower) < IPP_JSTATE_CANCELED); i++) {
         struct timespec delay = {0, 10000000L}; nanosleep(&delay, NULL);
     }
     assert(papplJobGetState(first) == IPP_JSTATE_COMPLETED);
