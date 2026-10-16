@@ -58,7 +58,7 @@ This decision also excludes acceptance against the live `brother_12mm_item` temp
 
 Apply the same distinction to certification wording: preserve the historical P710BT hardware-test evidence and qualify current summaries in `README.md`, `docs/ADDING-A-MODEL.md`, and `openspec/config.yaml` so they explicitly identify this length correction as software-verified, with physical validation left to the user separately. Do not describe this correction as hardware-certified or claim that earlier measurements verify it. This is truthful documentation of the already chosen validation scope, not a recertification task or a prerequisite for archive/delivery. The existing batch-printing requirement that hardware-success claims need integrated physical evidence remains unchanged.
 
-Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in this change's ordinary validation record; leave historical physical acceptance documents unchanged.
+Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in existing check output and `README.md`, outside the change directory; leave historical physical acceptance documents unchanged.
 
 ## Risks / Trade-offs
 
@@ -70,7 +70,7 @@ Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 
 
 ## Migration Plan
 
-Implement and verify locally under the apply workflow. Update README to distinguish total page length from transmitted print area and explain new P710BT fit/minimum-length rejection. Record software checks and their limits without adding a hardware acceptance task. Sync specs and archive once software implementation, checks, and review are complete, then use the configured delivery path. Physical validation by the user is separate and does not block completion.
+Implement and verify locally under the apply workflow. Update README to distinguish total page length from transmitted print area and explain new P710BT fit/minimum-length rejection. Record software checks and their limits without adding a hardware acceptance task. Leave spec sync and archival to the loop's archive stage after software implementation, checks, and review are complete, then use the configured delivery path. Physical validation by the user is separate and does not block completion.
 
 ## Cut Pass
 
@@ -95,11 +95,11 @@ Each retained mechanism, check, record, and task has a concrete authority below.
 | Reconstructed length and pixel assertions | label-rendering: Physical label length includes feed margins | Extend current decoders; row-count-only checks can pass while moving or shrinking ink. |
 | PT-2730 byte comparison | printer-device: PT-2730 regression | Compare existing captures; a test that merely completes can miss changed legacy bytes. |
 | Existing CUPS and container/image checks | label-rendering: Consistent model-specific media; project config apply guidance | Reuse existing suites; core-only checks miss PAPPL publication and placement. |
-| Software validation record | User decision: physical validation is separate; label-rendering: Reported 36 mm label | Retain existing check output and reconstructed pixels/lengths; a pass/fail tally alone does not establish what was verified. |
+| Software validation evidence in existing check output and README | User decision: physical validation is separate; label-rendering: Reported 36 mm label | Retain existing check output and reconstructed pixels/lengths with README qualification; a pass/fail tally alone does not establish what was verified, and a separate change-directory record duplicates existing evidence and violates the loop's implementation scope. |
 | Task 1.1 | server-architecture: Canonical physical media | One geometry change with boundary tests; separate per-callback constants can diverge. |
 | Task 1.2 | label-rendering: Advertised tape media is usable | One media-publication change with CUPS checks/docs; output-only correction leaves false capabilities. |
 | Task 2.1 | label-rendering: Default 1:1 PNG rendering does not discard image content | Extend existing preflight/tests/docs together; output-only trimming loses PNG ink or position. |
 | Task 2.2 | printer-device: Selected model controls the print protocol | One callback correction with raster/legacy checks; changing the height alone leaves transmitted rows inconsistent. |
 | Task 2.3 | Project config: adapter validation in the container | Extend the existing image smoke; a second harness duplicates it and omitting it misses deployed integration. |
 | Task 3.1 | Project config apply guidance; printer-device: PT-2730 regression | Run required integration checks once after implementation; core compilation alone does not demonstrate adapter behavior. |
-| Task 3.2 | User decision: no physical acceptance check; repository OpenSpec lifecycle and cut-pass instructions | Reconcile software evidence and its limits before syncing/archive; retaining a physical prerequisite blocks the user's chosen software-only completion. |
+| Task 3.2 | User decision: no physical acceptance check; repository OpenSpec lifecycle and cut-pass instructions | Reconcile existing software evidence and its limits, leaving sync/archive to the loop's later archive stage; retaining a physical prerequisite blocks software-only completion, while implementation-stage archival breaks the loop's plan digest and review. |
