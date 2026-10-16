@@ -9,6 +9,8 @@
 #include "raster.h"
 #include "status.h"
 #include "device_usb.h"
+#include "device_bt.h"
+#include "config.h"
 #include "cutter.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -57,6 +59,27 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
     return accepted == (ssize_t)n && after.write_bytes - before.write_bytes == n;
 }
 
+/* Live printer transports; the socket test sink has no status path. */
+static bool pt_live_uri(const char *uri)
+{
+    return pt_usb_is_uri(uri) || pt_bt_is_uri(uri);
+}
+
+static ssize_t pt_read_status(pappl_device_t *device, const char *uri, void *buffer, size_t bytes)
+{
+    return pt_bt_is_uri(uri) ? pt_bt_read_status(device, uri, buffer, bytes)
+                             : pt_usb_read_status(device, uri, buffer, bytes);
+}
+
+/* Print output runs while the run state is uncertain, so a failed write leaves
+ * the printer in an unknown state. */
+static bool pt_job_write(pappl_job_t *job, pappl_device_t *device, const uint8_t *buf, size_t n)
+{
+    if (pt_dev_write(device, buf, n)) return true;
+    papplJobSetMessage(job, "Write to printer failed; output uncertain: power-cycle printer, then restart server");
+    return false;
+}
+
 /* The device may not have the 32-byte status reply ready on the first read, so
  * poll a few times with a short delay, mirroring upstream ptouch_getstatus. Each
  * read is itself bounded (300 ms) so the loop cannot hang: ~4 s worst case. */
@@ -64,23 +87,25 @@ static bool pt_dev_write(pappl_device_t *device, const uint8_t *buf, size_t n)
 #define PT_STATUS_POLL_NS    100000000L   /* 0.1 s */
 
 /* One live status read. `st` is meaningful only when `parsed`; `n` is the raw
- * read result, which separates an I/O error (< 0) from no answer at all (0). */
-typedef struct { ssize_t n; bool parsed; pt_status st; } pt_live_read;
+ * read result, which separates an I/O error (< 0) from no answer at all (0).
+ * `write_failed` means the status request itself was not sent. */
+typedef struct { ssize_t n; bool parsed; bool write_failed; pt_status st; } pt_live_read;
 
 /* Read the live tape from an already-open device: ESC i S, then poll for
  * the reply. The caller owns the device and interprets the result; a supported
  * tape is `parsed && st.tape_px > 0`. Validate transport before any command or
- * connection-data access; a socket sink has no USB status path. */
+ * connection-data access; a socket sink has no status path. */
 static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
 {
     uint8_t cmd[8];
     pt_live_read r = {0};
-    if (!pt_usb_is_uri(uri)) {
+    if (!pt_live_uri(uri)) {
         r.n = -1;
         return r;
     }
     if (!pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
         r.n = -1;
+        r.write_failed = true;
         return r;
     }
 
@@ -89,7 +114,7 @@ static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
     for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
         struct timespec w = {0, PT_STATUS_POLL_NS};
         nanosleep(&w, NULL);
-        ssize_t n = pt_usb_read_status(device, uri, buf + used, sizeof buf - used);
+        ssize_t n = pt_read_status(device, uri, buf + used, sizeof buf - used);
         if (n < 0) { r.n = n; break; }
         used += (size_t)n;
         r.n = (ssize_t)used;
@@ -216,6 +241,9 @@ typedef struct {
     const pt_dev *model;
     pt_run run;
     bool media_confirmed;
+    int idle_poll_seconds;        /* -1: every PAPPL request; 0: never; N: minimum gap */
+    bool idle_polled;
+    struct timespec last_idle_poll;
 } pt_printer_state;
 
 static pt_printer_state *pt_state(pappl_printer_t *printer)
@@ -333,9 +361,9 @@ static bool pt_print_pending(pappl_job_t *job, pappl_device_t *device, bool fina
     uint8_t command[8];
     bool cut = final && batch->policy.cut_at_end;
     if (papplJobIsCanceled(job)) return false;
-    if (cut && !pt_dev_write(device, command, pt_cmd_setadvanced(command, 8))) return false;
+    if (cut && !pt_job_write(job, device, command, pt_cmd_setadvanced(command, 8))) return false;
     if (papplJobIsCanceled(job)) return false;
-    if (!pt_dev_write(device, command, cut ? pt_cmd_eject(command) : pt_cmd_ff(command)) ||
+    if (!pt_job_write(job, device, command, cut ? pt_cmd_eject(command) : pt_cmd_ff(command)) ||
         !pt_wait_ready(job, device)) return false;
     batch->pending = false;
     pt_run_set(papplJobGetPrinter(job), cut ? PT_RUN_CLOSED : PT_RUN_OPEN);
@@ -359,17 +387,86 @@ static bool pt_page_width_matches(const pappl_pr_options_t *o, const pt_geometry
            o->header.cupsWidth >= (unsigned)g->right_px;
 }
 
+/* True when the job's media-col names this margin; omitted margins are inherited. */
+static bool pt_submitted_margin(pappl_job_t *job, const char *name)
+{
+    ipp_attribute_t *col = papplJobGetAttribute(job, "media-col");
+    return col && ippGetValueTag(col) == IPP_TAG_BEGIN_COLLECTION &&
+           ippFindAttribute(ippGetCollection(col, 0), name, IPP_TAG_INTEGER);
+}
+
+int pt_resolve_page_margins(pappl_job_t *job, pappl_pr_options_t *o)
+{
+    pt_geometry g;
+    for (size_t i = 0; i < sizeof pt_tape_mm / sizeof pt_tape_mm[0]; i++) {
+        if (!pt_tape_geometry(pt_tape_mm[i], &g) || !pt_page_width_matches(o, &g, pt_tape_mm[i]))
+            continue;
+        if (!pt_submitted_margin(job, "media-left-margin"))
+            o->media.left_margin = g.left_margin_centimm;
+        if (!pt_submitted_margin(job, "media-right-margin"))
+            o->media.right_margin = g.right_margin_centimm;
+        o->header.cupsInteger[CUPS_RASTER_PWG_ImageBoxLeft] =
+            (unsigned)o->media.left_margin * o->header.HWResolution[0] / 2540;
+        o->header.cupsInteger[CUPS_RASTER_PWG_ImageBoxRight] = o->header.cupsWidth -
+            (unsigned)o->media.right_margin * o->header.HWResolution[0] / 2540 - 1;
+        return pt_tape_mm[i];
+    }
+    return 0;
+}
+
+static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live);
+
+/* The first label holds the device until the loaded tape matches. Only status
+ * requests reach the printer; faults and missing replies are part of a swap. */
+#define PT_TAPE_WAIT_S 2
+
+static bool pt_wait_for_tape(pappl_job_t *j, pappl_device_t *d, int wanted)
+{
+    pt_batch *b = papplJobGetData(j);
+    pappl_printer_t *printer = papplJobGetPrinter(j);
+    const char *uri = papplPrinterGetDeviceURI(printer);
+    int loaded = b->tape_mm;
+    papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Waiting for %d mm tape; %d mm loaded", wanted, loaded);
+    while (!papplJobIsCanceled(j)) {
+        pt_live_read live = pt_read_live_tape(d, uri);
+        if (papplJobIsCanceled(j)) break;
+        if (live.n < 0) {
+            papplJobSetMessage(j, "Cannot read loaded tape while waiting for %d mm tape", wanted);
+            papplLogJob(j, PAPPL_LOGLEVEL_ERROR, "%s", papplJobGetMessage(j));
+            break;
+        }
+        if (pt_publish_tape(printer, live) && live.st.tape_mm == wanted) {
+            b->tape_mm = (uint8_t)wanted;
+            papplJobSetMessage(j, "Loaded tape matches %d mm", wanted);
+            papplLogJob(j, PAPPL_LOGLEVEL_INFO, "%s", papplJobGetMessage(j));
+            return true;
+        }
+        if (live.parsed) loaded = live.st.tape_mm;
+        papplPrinterSetReasons(printer, PAPPL_PREASON_MEDIA_NEEDED, PAPPL_PREASON_NONE);
+        if (loaded) papplJobSetMessage(j, "Waiting for %d mm tape; %d mm loaded", wanted, loaded);
+        else papplJobSetMessage(j, "Waiting for %d mm tape; no tape loaded", wanted);
+        struct timespec delay = {PT_TAPE_WAIT_S, 0};
+        nanosleep(&delay, NULL);
+    }
+    papplPrinterSetReasons(printer, PAPPL_PREASON_NONE, PAPPL_PREASON_MEDIA_NEEDED);
+    papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Stopped waiting for %d mm tape", wanted);
+    return false;
+}
+
 static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 {
     (void)p;
     pt_batch *b = papplJobGetData(j);
     if (!b || b->failed || b->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
+    int tape_mm = 0;
+    if (o->header.HWResolution[0] == 180 && o->header.HWResolution[1] == 180 &&
+        o->header.cupsBitsPerPixel == 1 &&
+        o->header.cupsHeight >= PT_ROLL_MIN_CENTIMM * 180 / 2540 &&
+        o->header.cupsHeight <= PT_ROLL_MAX_CENTIMM * 180 / 2540)
+        tape_mm = pt_resolve_page_margins(j, o);
+    /* A swap after the first label would end the run with labels already printed. */
     pt_geometry g;
-    if (!pt_tape_geometry(b->tape_mm, &g) || o->header.HWResolution[0] != 180 ||
-        o->header.HWResolution[1] != 180 || o->header.cupsBitsPerPixel != 1 ||
-        !pt_page_width_matches(o, &g, b->tape_mm) ||
-        o->header.cupsHeight < PT_ROLL_MIN_CENTIMM * 180 / 2540 ||
-        o->header.cupsHeight > PT_ROLL_MAX_CENTIMM * 180 / 2540) {
+    if (!tape_mm || (tape_mm != b->tape_mm && !b->first_label) || !pt_tape_geometry(tape_mm, &g)) {
         papplJobSetReasons(j, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
         papplJobSetMessage(j, "Page geometry does not match loaded %d mm tape at 180 dpi", b->tape_mm);
         return pt_fail_job(j);
@@ -385,6 +482,7 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
      * default header. Keep a healthy preceding run if validation rejected it. */
     pt_run run = pt_run_get(printer);
     if (run == PT_RUN_UNCERTAIN && b->first_label) return pt_fail_job(j);
+    if (tape_mm != b->tape_mm && !pt_wait_for_tape(j, d, tape_mm)) return pt_fail_job(j);
     if (b->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
     bool continuation = pt_chain_get(printer);
     pt_run_set(printer, PT_RUN_UNCERTAIN);
@@ -392,10 +490,10 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     bool p710bt = model->pid == 0x20af;
     uint8_t buf[100];
     if (b->first_label &&
-        ((!continuation && p710bt && !pt_dev_write(d, buf, pt_cmd_invalidate(buf))) ||
-         (!continuation && !pt_dev_write(d, buf, pt_cmd_init(buf))) ||
-         !pt_dev_write(d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
-         (p710bt && !pt_dev_write(d, buf, pt_cmd_auto_status(buf, true)))))
+        ((!continuation && p710bt && !pt_job_write(j, d, buf, pt_cmd_invalidate(buf))) ||
+         (!continuation && !pt_job_write(j, d, buf, pt_cmd_init(buf))) ||
+         !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
+         (p710bt && !pt_job_write(j, d, buf, pt_cmd_auto_status(buf, true)))))
         return pt_fail_job(j);
     /* The logical page stays whole; only the transmitted print area shrinks by
      * the feed the hardware replaces at each end, so the feed is counted once. */
@@ -403,11 +501,11 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
                              o->header.cupsHeight - 2u * PT_END_MARGIN_PX,
                              b->first_label && !continuation ? 0 : 1) :
                              pt_cmd_printinfo(buf, b->tape_mm);
-    if (!pt_dev_write(d, buf, info_len) ||
-        !pt_dev_write(d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
-        !pt_dev_write(d, buf, pt_cmd_setadvanced(buf, 0)) ||
-        (p710bt && (!pt_dev_write(d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
-                   !pt_dev_write(d, buf, pt_cmd_compression(buf, 2)))))
+    if (!pt_job_write(j, d, buf, info_len) ||
+        !pt_job_write(j, d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
+        !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)) ||
+        (p710bt && (!pt_job_write(j, d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
+                   !pt_job_write(j, d, buf, pt_cmd_compression(buf, 2)))))
         return pt_fail_job(j);
     b->first_label = false;
     b->page_active = true;
@@ -440,10 +538,10 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
                     pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
                     pt_cmd_sendraster(buf, packed, sizeof packed);
-    return pt_dev_write(d, buf, length) || pt_fail_job(j);
+    return pt_job_write(j, d, buf, length) || pt_fail_job(j);
 }
 
-/* Wait for receive-ready, not just print-completed. This is USB flow control,
+/* Wait for receive-ready, not just print-completed. This is printer flow control,
  * independent of the client finishing choice. No commands are sent here. */
 #define PT_PRINT_READY_TIMEOUT_MS 20000
 static long pt_ms_since(const struct timespec *t0);
@@ -451,14 +549,14 @@ static long pt_ms_since(const struct timespec *t0);
 static bool pt_wait_ready(pappl_job_t *j, pappl_device_t *d)
 {
     const char *uri = papplPrinterGetDeviceURI(papplJobGetPrinter(j));
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri)) return true;
     uint8_t packet[32];
     size_t used = 0;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     while (pt_ms_since(&start) < PT_PRINT_READY_TIMEOUT_MS) {
         if (papplJobIsCanceled(j)) return false;
-        ssize_t n = pt_usb_read_status(d, uri, packet + used, sizeof packet - used);
+        ssize_t n = pt_read_status(d, uri, packet + used, sizeof packet - used);
         if (n < 0) {
             papplJobSetMessage(j, "printer status read failed after printing");
             return false;
@@ -622,15 +720,34 @@ static bool pt_publish_tape(pappl_printer_t *printer, pt_live_read live)
     return false;
 }
 
+/* Claim an idle probe slot. The slot is taken when the attempt starts, so a
+ * failed open also waits out the interval instead of retrying on every query. */
+static bool pt_idle_poll_due(pappl_printer_t *printer)
+{
+    pt_printer_state *state = pt_state(printer);
+    pthread_mutex_lock(&state->lock);
+    bool due = state->idle_poll_seconds < 0 ||
+        (state->idle_poll_seconds > 0 &&
+         (!state->idle_polled || pt_ms_since(&state->last_idle_poll) >= state->idle_poll_seconds * 1000L));
+    if (due) {
+        state->idle_polled = true;
+        clock_gettime(CLOCK_MONOTONIC, &state->last_idle_poll);
+    }
+    pthread_mutex_unlock(&state->lock);
+    return due;
+}
+
 static bool status_cb(pappl_printer_t *printer)
 {
     /* The job owns live status and may have an unfinished command in flight. */
     if (papplPrinterGetState(printer) == IPP_PSTATE_PROCESSING) return true;
     if (pt_recovery_required(printer)) return true;
     const char *uri = papplPrinterGetDeviceURI(printer);
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri) || !pt_idle_poll_due(printer)) return true;
     const pt_dev *model = pt_state(printer)->model;
-    ssize_t count = pt_usb_count(model->vid, model->pid);
+    /* USB enumeration tells "unplugged" from "in use"; Bluetooth's only
+     * reachability check is the connection attempt itself. */
+    ssize_t count = pt_usb_is_uri(uri) ? pt_usb_count(model->vid, model->pid) : 1;
     if (count != 1) {
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
@@ -644,7 +761,8 @@ static bool status_cb(pappl_printer_t *printer)
         if (papplPrinterGetState(printer) == IPP_PSTATE_PROCESSING) return true;
         papplPrinterSetReasons(printer, PAPPL_PREASON_OFFLINE, PT_STATUS_REASONS & ~PAPPL_PREASON_OFFLINE);
         pt_set_media_confirmed(printer, false);
-        papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "%s is present but cannot be opened or claimed", model->name);
+        if (pt_usb_is_uri(uri))
+            papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "%s is present but cannot be opened or claimed", model->name);
         return true;
     }
     /* Status requests do not initialize or finalize the printer. */
@@ -677,18 +795,22 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
         return false;
     }
     const char *uri = papplPrinterGetDeviceURI(printer);
-    if (!pt_usb_is_uri(uri)) return true;
+    if (!pt_live_uri(uri)) return true;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
+    pt_live_read live;
     do {
-        pt_live_read live = pt_read_live_tape(device, uri);
+        live = pt_read_live_tape(device, uri);
         if (pt_publish_tape(printer, live)) return true;
         if (live.parsed || live.n != 0 || papplJobIsCanceled(job)) break;
         struct timespec delay = {0, PT_MEDIA_RETRY_NS};
         nanosleep(&delay, NULL);
     } while (pt_ms_since(&start) < PT_MEDIA_REFRESH_MS);
     papplJobSetReasons(job, PAPPL_JREASON_DOCUMENT_UNPRINTABLE_ERROR, PAPPL_JREASON_NONE);
-    papplJobSetMessage(job, "Live tape status is not clean, readable, and supported");
+    if (live.write_failed)
+        papplJobSetMessage(job, "Status request to printer failed; nothing was printed");
+    else
+        papplJobSetMessage(job, "Live tape status is not clean, readable, and supported");
     return false;
 }
 
@@ -712,11 +834,23 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
                  "Printer identity '%s' does not match USB URI '%s'", model, device_uri);
         return false;
     }
+    if (device_uri && !strncmp(device_uri, "ptouch-bt://", 12) &&
+        (!pt_bt_is_uri(device_uri) || dev->pid != 0x20af)) {
+        papplLog(system, PAPPL_LOGLEVEL_ERROR,
+                 "Printer identity '%s' does not match Bluetooth URI '%s'", model, device_uri);
+        return false;
+    }
+    int idle_poll_seconds;
+    if (!pt_parse_idle_poll(getenv("PTOUCH_IDLE_POLL_SECONDS"), &idle_poll_seconds)) {
+        papplLog(system, PAPPL_LOGLEVEL_ERROR, "Invalid PTOUCH_IDLE_POLL_SECONDS");
+        return false;
+    }
 
     pt_printer_state *state = calloc(1, sizeof *state);
     if (!state) return false;
     if (pthread_mutex_init(&state->lock, NULL)) { free(state); return false; }
     state->model = dev;
+    state->idle_poll_seconds = idle_poll_seconds;
     data->extension = state;
 
     data->rstartjob_cb = r_startjob;

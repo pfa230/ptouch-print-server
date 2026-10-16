@@ -317,6 +317,40 @@ int main(void)
         }
     }
     assert(init_calls == previous_inits && opens == previous_opens && output_bytes == previous_output);
+
+    /* Bluetooth and polling settings fail before any USB access. */
+    unsetenv("PTOUCH_MODEL");
+    setenv("PTOUCH_BT_ADDRESS", "A4:C1:38:AB:CD:EF", 1);
+    char *server[] = { "ptouch-app", "server", NULL };
+    assert(pt_application_main(2, server) == EXIT_FAILURE);
+    setenv("PTOUCH_MODEL", "PT-P710BT", 1);
+    for (size_t j = 1; j < sizeof commands / sizeof commands[0]; j++) {
+        char *args[] = { "ptouch-app", (char *)commands[j], NULL };
+        assert(pt_application_main(2, args) == EXIT_FAILURE);
+    }
+    setenv("PTOUCH_BT_ADDRESS", "A4:C1:38:AB:CD", 1);
+    assert(pt_application_main(2, server) == EXIT_FAILURE);
+    setenv("PTOUCH_BT_ADDRESS", "A4:C1:38:AB:CD:EF", 1);
+    setenv("PTOUCH_DEVICE_URI", "socket://127.0.0.1:9100", 1);
+    assert(pt_application_main(2, server) == EXIT_FAILURE);
+    unsetenv("PTOUCH_DEVICE_URI");
+    const char *bad_polls[] = { "-1", "1.5", "soon" };
+    for (size_t i = 0; i < sizeof bad_polls / sizeof bad_polls[0]; i++) {
+        setenv("PTOUCH_IDLE_POLL_SECONDS", bad_polls[i], 1);
+        assert(pt_application_main(2, server) == EXIT_FAILURE);
+    }
+    unsetenv("PTOUCH_IDLE_POLL_SECONDS");
+    assert(init_calls == previous_inits && opens == previous_opens && output_bytes == previous_output);
+    /* A configured address creates only the Bluetooth queue, even with the
+     * same model attached over USB, and never enumerates USB. */
+    selected = pt_lookup_name("PT-P710BT"); inventory(1, false);
+    char expected_id[100]; pt_usb_format_id(selected, expected_id, sizeof expected_id);
+    pappl_system_t *sys = system_cb(0, NULL, NULL); assert(sys);
+    assert(!strcmp(queue_uri, "ptouch-bt://Brother/PT-P710BT/A4:C1:38:AB:CD:EF"));
+    assert(!strcmp(queue_id, expected_id));
+    assert(init_calls == previous_inits && opens == previous_opens && output_bytes == previous_output);
+    papplSystemDelete(sys);
+    unsetenv("PTOUCH_BT_ADDRESS");
     puts("Both USB models, production diagnostics, startup identity, replug, and socket guards passed");
     return 0;
 }

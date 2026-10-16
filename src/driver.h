@@ -13,9 +13,14 @@
 #define PT_END_MARGIN_PX 14
 
 /* Confirm clean live tape before geometry is constructed, using a bounded
- * status query on the job-owned USB handle. Non-USB test transports retain
+ * status query on the job-owned printer connection. Socket test transports retain
  * configured media. Uncertain output blocks every transport until recovery. */
 bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device);
+
+/* Find the supported tape whose geometry matches the page and replace margins
+ * the job's media-col did not submit with that tape's published margins.
+ * Returns the tape width in mm, or 0 when no supported tape matches. */
+int pt_resolve_page_margins(pappl_job_t *job, pappl_pr_options_t *options);
 
 /* Fill driver_data for a P-touch printer (PAPPL pappl_pr_driver_cb_t). */
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name,

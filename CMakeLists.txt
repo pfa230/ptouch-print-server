@@ -13,6 +13,7 @@ add_library(ptcore STATIC
   src/raster.c
   src/status.c
   src/cutter.c
+  src/config.c
 )
 target_include_directories(ptcore PUBLIC src)
 
@@ -26,6 +27,12 @@ if(NOT PTOUCH_CORE_ONLY)
   pkg_check_modules(PAPPL REQUIRED pappl)
   pkg_check_modules(USB REQUIRED libusb-1.0)
   pkg_check_modules(PNG REQUIRED libpng)
+  # RFCOMM socket declarations only (libbluetooth-dev); nothing is linked.
+  include(CheckIncludeFiles)
+  check_include_files("bluetooth/bluetooth.h;bluetooth/rfcomm.h" HAVE_BLUETOOTH_RFCOMM_H)
+  if(NOT HAVE_BLUETOOTH_RFCOMM_H)
+    message(FATAL_ERROR "bluetooth/rfcomm.h not found; install libbluetooth-dev")
+  endif()
   # Optional live transport for the test-only probe, using the existing scheme.
   target_sources(ptouch-cut-probe PRIVATE src/device_usb.c)
   target_compile_definitions(ptouch-cut-probe PRIVATE PT_PROBE_TRANSPORT=1)
@@ -62,17 +69,23 @@ if(NOT PTOUCH_CORE_ONLY)
   target_compile_options(test_png_geometry PRIVATE ${PAPPL_CFLAGS_OTHER})
   add_test(NAME png_geometry COMMAND test_png_geometry)
   set_tests_properties(png_geometry PROPERTIES TIMEOUT 90)
-  add_executable(test_device_usb tests/test_device_usb.c)
+  add_executable(test_device_usb tests/test_device_usb.c src/device_bt.c)
   target_link_libraries(test_device_usb PRIVATE ptcore ${PAPPL_LIBRARIES} ${USB_LIBRARIES})
   target_include_directories(test_device_usb PRIVATE ${PAPPL_INCLUDE_DIRS} ${USB_INCLUDE_DIRS})
   target_link_directories(test_device_usb PRIVATE ${PAPPL_LIBRARY_DIRS} ${USB_LIBRARY_DIRS})
   target_compile_options(test_device_usb PRIVATE ${PAPPL_CFLAGS_OTHER})
   add_test(NAME device_usb COMMAND test_device_usb)
+  add_executable(test_device_bt tests/test_device_bt.c)
+  target_link_libraries(test_device_bt PRIVATE ptcore ${PAPPL_LIBRARIES})
+  target_include_directories(test_device_bt PRIVATE ${PAPPL_INCLUDE_DIRS})
+  target_link_directories(test_device_bt PRIVATE ${PAPPL_LIBRARY_DIRS})
+  target_compile_options(test_device_bt PRIVATE ${PAPPL_CFLAGS_OTHER})
+  add_test(NAME device_bt COMMAND test_device_bt)
   # Test assertions include fixture setup and must stay active in Release too.
-  foreach(test_target test_driver test_pappl_raster test_pappl_finishings test_png_geometry test_device_usb)
+  foreach(test_target test_driver test_pappl_raster test_pappl_finishings test_png_geometry test_device_usb test_device_bt)
     target_compile_options(${test_target} PRIVATE -UNDEBUG)
   endforeach()
-  add_executable(ptouch-app src/main.c src/driver.c src/device_usb.c src/filter_png.c)
+  add_executable(ptouch-app src/main.c src/driver.c src/device_usb.c src/device_bt.c src/filter_png.c)
   target_link_libraries(ptouch-app PRIVATE ptcore ${PAPPL_LIBRARIES} ${USB_LIBRARIES} ${PNG_LIBRARIES})
   target_include_directories(ptouch-app PRIVATE ${PAPPL_INCLUDE_DIRS} ${USB_INCLUDE_DIRS} ${PNG_INCLUDE_DIRS})
   target_link_directories(ptouch-app PRIVATE ${PAPPL_LIBRARY_DIRS} ${USB_LIBRARY_DIRS} ${PNG_LIBRARY_DIRS})

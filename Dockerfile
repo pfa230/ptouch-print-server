@@ -5,7 +5,7 @@ FROM debian:bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config git ca-certificates \
       autoconf automake libtool gettext autopoint \
-      libusb-1.0-0-dev libgd-dev libpng-dev libjpeg-dev zlib1g-dev \
+      libusb-1.0-0-dev libbluetooth-dev libgd-dev libpng-dev libjpeg-dev zlib1g-dev \
       libcups2-dev libcupsimage2-dev cups-ipp-utils usbutils \
       libssl-dev libavahi-client-dev libgnutls28-dev libkrb5-dev \
       python3 python3-pil \
@@ -19,9 +19,11 @@ COPY scripts/build-cups.sh /tmp/build-cups.sh
 RUN /tmp/build-cups.sh /tmp/cups-raster.patch
 COPY patches/pappl-1.4.11-raster.patch /tmp/pappl-raster.patch
 COPY patches/pappl-1.4.11-finishings.patch /tmp/pappl-finishings.patch
+COPY patches/pappl-1.4.11-job-history.patch /tmp/pappl-job-history.patch
 RUN git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl /tmp/pappl \
  && cd /tmp/pappl && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-raster.patch \
  && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-finishings.patch \
+ && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-job-history.patch \
  && ./configure && make && make install && ldconfig \
  && rm -rf /tmp/pappl
 
