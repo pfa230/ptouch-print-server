@@ -24,6 +24,8 @@ PAPPL 1.4.11 owns the queue and scheduling. Its public `papplPrinterOpenDevice` 
 
 **Non-Goals:** A raster-free cutter promise, PT-2730 cutter support, changes to ordinary finishing defaults, another spooler, a web UI, arbitrary raw commands, feed options, or further hardware experiments in this change.
 
+**Scope correction, 2026-10-16:** Baseline driver tests already take roughly 30/60 seconds while passing. Investigation and optimization of those existing delays is deferred to [issue #62](https://github.com/pfa230/ptouch-print-server/issues/62). The user explicitly directed that this unrelated issue must not hold up the cut operation. Do not add timing instrumentation, repeat baseline profiling, alter PAPPL timers/shutdown, or fix existing test performance in this change. Continue the preserved implementation, finish its client/evidence documentation, and run the required functional checks and review; only failures or regressions caused by this change need repair here.
+
 ## Decisions
 
 ### 1. One model-scoped printer operation
@@ -94,6 +96,8 @@ Implement on the existing change branch. Use the loop's normal post-implementati
 ## Cut pass
 
 Baseline revision: removed task 0.1, its manual pre-implementation merge prerequisite, and its ancestry check. They duplicate and conflict with the existing post-implementation integration stage. Retain ordinary print regressions on the branch and the existing integration checks on the result merged with main; no new integration mechanism is added.
+
+Timing cut: removed further baseline profiling and any test/PAPPL timing fix from this change. The user's follow-up request is served by issue #62, which retains the observations and verification needed for separate work. A note only in temporary transcripts would lose the deferred task; no new feature task or validation gate is needed.
 
 Removed: the disproved no-raster/no-blank-page restriction, claims of a terminal EJECT/closed physical run, unproven PT-2730 cutter support, the nine-label approval/acceptance gate, model-protocol exploration tasks, and a separate busy-versus-open-failure tracking mechanism. Reuse the current scheduler, transports, status parser, protocol builders, mutex, idle-poll slot, and recovery latch. Add no retry, queue, raw-command option, feed control, persistent request record, or generic maintenance framework.
 
