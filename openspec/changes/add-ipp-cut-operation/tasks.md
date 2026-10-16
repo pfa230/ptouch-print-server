@@ -1,5 +1,9 @@
 # Tasks
 
+## 0. Current-main baseline prerequisite
+
+- [ ] 0.1 Before tasks 1.1–3.1, have the committing loop or operator merge or rebase current main into the change branch, including P710BT length correction 6e7fc07, and retain the planning artifacts. Verify `git merge-base --is-ancestor main HEAD` succeeds. This preparation requires commits and must be completed outside a no-commit implementation turn; leave implementation unstarted until it is complete. Keep the integration local.
+
 ## 1. Verified blank continuation and run state
 
 - [ ] 1.1 Add the minimal PT-P710BT one-white-row continuation helper using existing protocol builders. Verify the captured 57-byte sequence for 12 mm, loaded-width variants, page flag 1, auto-cut/chain on, 14-dot margin, white PackBits data and FF, with no initialize/invalidate/EJECT or user raster. Preserve ordinary protocol captures.

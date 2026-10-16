@@ -89,9 +89,11 @@ Add one numeric `ipptool` request and README invocation, and retain the existing
 
 ## Migration Plan
 
-Implement on the current main baseline, retaining its ordinary label-length and finishing behavior. No production configuration changes are needed. This proposal update does not resume the stopped loop or deploy a candidate. Removing the custom operation is the rollback; finish or recover a held run before restarting, under the existing recovery policy. The new state is not persisted.
+Implement on the current main baseline, retaining its ordinary label-length and finishing behavior. Before starting any implementation task, the committing loop or operator must merge or rebase current main into this change branch, including P710BT length correction `6e7fc07`, and verify that current main is an ancestor of HEAD. This is local baseline preparation for the existing migration requirement, not permission for a no-commit implementer turn to create commits. The reviewed branch lacks `6e7fc07`; until the committing loop or operator completes this preparation, implementation remains blocked. No production configuration changes are needed. This proposal update does not resume the stopped loop or deploy a candidate. Removing the custom operation is the rollback; finish or recover a held run before restarting, under the existing recovery policy. The new state is not persisted.
 
 ## Cut pass
+
+Baseline revision: removed a separate correction-ancestry check because current main already includes `6e7fc07`; the current-main ancestry check covers it. The retained prerequisite and check are justified individually below.
 
 Removed: the disproved no-raster/no-blank-page restriction, claims of a terminal EJECT/closed physical run, unproven PT-2730 cutter support, the nine-label approval/acceptance gate, model-protocol exploration tasks, and a separate busy-versus-open-failure tracking mechanism. Reuse the current scheduler, transports, status parser, protocol builders, mutex, idle-poll slot, and recovery latch. Add no retry, queue, raw-command option, feed control, persistent request record, or generic maintenance framework.
 
@@ -120,6 +122,8 @@ Removed: the disproved no-raster/no-blank-page restriction, claims of a terminal
 | Repeat/continuation/failure/race tests | Healthy continuation; Direct cuts use exclusive device access | A single happy-path request misses tape-consuming repeats and interleaved output. |
 | Numeric ipptool fixture and README | User's requested IPP interface | A symbolic project-only operation name is unknown to stock clients. |
 | Existing physical record, retained under tests | Cut support reflects physical evidence | A socket response alone does not establish a physical cut. |
+| Task 0.1: local current-main integration by the committing loop or operator | Migration Plan: implement on current main while preserving Decision 2's P710BT correction | Starting implementation on the stale branch cannot exercise the required correction and overlaps later driver/test changes. |
+| Baseline ancestry verification | Migration Plan; task 1.2's unchanged length captures | Assuming the branch name or tip is current leaves the missing correction undetected. |
 | Task 1.1: helper and exact-byte tests | Direct IPP cut action | Reusing standalone EJECT repeats a failed mechanism. |
 | Task 1.2: run-state distinction and regression tests | Healthy continuation | The old three states cannot encode both blank continuation and repeat no-op. |
 | Task 2.1: IPP handler and behavior tests | Direct IPP cut action; Direct cuts use exclusive device access | Protocol-only work supplies no callable action. |
