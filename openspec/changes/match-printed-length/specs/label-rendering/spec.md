@@ -5,8 +5,8 @@
 The server SHALL interpret page length as the complete physical label length, including required feed margins, within one 180 dpi dot of conversion rounding. It SHALL NOT add feed margins outside that length or alter 1:1 content scale to make it fit. On joined strips, each page SHALL occupy its requested length; an initial discarded leader SHALL NOT count as part of a label.
 
 #### Scenario: Reported 36 mm label
-- **WHEN** a fitting 36 mm template is submitted to a PT-P710BT with default finishing
-- **THEN** the released label measures 36 mm within conversion and documented measurement tolerance, rather than about 40 mm, with unchanged content size
+- **WHEN** a fitting 36 mm template is submitted to the PT-P710BT path with default finishing and captured without hardware
+- **THEN** its declared print-area rows and feed margins reconstruct a 36 mm page within one 180 dpi dot of rounding, with unchanged content size and positions, rather than a roughly 40 mm page
 
 #### Scenario: Image-derived physical length
 - **WHEN** a PNG with a 36 mm along-tape canvas at its declared DPI omits explicit media length and its content fits the physical window

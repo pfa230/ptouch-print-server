@@ -48,40 +48,29 @@ JPEG and explicit scaling continue through PAPPL placement using the truthful im
 
 Alternative: only add advertised margins. That would reject every existing full-page PNG canvas even when its ends are already blank. Trimming any whitespace indiscriminately would change intentional positioning and image-derived length.
 
-### 4. Reuse existing checks and measure complete labels
+### 4. Finish with software verification; physical validation is separate
 
 Extend the existing core/adapter/PNG/CUPS/image-smoke checks. Reconstruct the physical page in capture assertions as 14 blank dots, decoded print-area rows, and 14 blank dots. Compare both total length and internal pixels, rather than treating fewer transmitted rows as sufficient proof. Preserve PT-2730 byte-identical captures and keep incomplete-stream, wrong-tape, finishing, and recovery checks.
 
-Use an isolated candidate and a bounded six-label physical check on 12 mm tape, after separate operator authorization:
+User decision on 2026-10-16: “no physical acceptance check, I'll validate separately.” Complete this change with software captures, pixel/length reconstruction, PT-2730 byte comparisons, and the required container/CUPS checks. No physical acceptance check, printer output, SSH operation, or service/configuration change belongs to this change. Sync, archive, and delivery do not wait for operator measurements. The user owns physical validation separately; do not claim measured physical success from software evidence.
 
-| Stage | Input / finishing | Labels | Measurement |
-| --- | --- | ---: | --- |
-| 1 | Two copies of a fitting 36 mm PNG, default trim | 2 | Each cut label is 36 mm; internal reference span and both ends are intact. |
-| 2 | PWG pages of 36 mm and 50 mm, final-only | 2 | Joined strip is 86 mm; markers identify the 36/50 mm page boundary without an extra 4 mm per page. |
-| 3 | One fitting 36 mm PNG, chain-only | 1 | Hold the end; retain the run through a status-only idle interval. |
-| 4 | One fitting 50 mm PNG, chain-and-final, continuing stage 3 | 1 | Release and measure the preceding 36 mm label and final 50 mm label without a new leader. |
-
-Cover none with software captures so the physical gate ends closed without a helper print. There are no automatic retries or extra button feed/cuts. Intended complete length is 244 mm plus initial leaders; prepare at least 0.4 m of tape. Measure released lengths and the strip within ±0.5 mm using a ruler/caliper, and a known internal reference span to the same tolerance. Digital captures must satisfy the stricter one-dot conversion bound. Retain requested lengths, measured lengths, decoded row counts, source fixtures, and job outcomes together. Stop on any failure and record it without claiming physical success.
-
-The six labels exercise the actual P710BT length change in separated, joined, and continued output. This does not rerun the entire previous hardware gate or certify previously untested tape widths. Use the unchanged PT-2730 capture baseline rather than printing unnecessary legacy labels.
+Use the existing capture fixtures to cover 36 mm and 50 mm individual pages, an 86 mm joined pair, copies, all four finishing presets, and held-run continuation. Check internal pixel positions as well as length. Keep validation evidence in this change's ordinary validation record; leave historical physical acceptance documents unchanged.
 
 ## Risks / Trade-offs
 
 - [Existing templates may put ink within 2 mm of an end] → Reject with a clear physical-window error; do not silently alter the template or crop it. The live `brother_12mm_item` operator template is not stored in this repository; implementation acceptance must inspect its rendered output when available, without adding its name as a special case.
-- [Minimum feed and margin behavior could differ from the manual in chained output] → Measure the bounded integrated gate before claiming success. A failure requires revisiting this design, not an automatic alternative command policy.
+- [Minimum feed and margin behavior could differ from the manual in chained output] → Verify the commanded geometry in software, report that physical behavior is unverified, and leave separate physical validation to the user.
 - [Centimm, dot, and image-box rounding can disagree by a row] → Derive all boundaries from the same physical geometry and assert reconstructed pixels/lengths across orientations, DPI, minimum/maximum lengths, and explicit margins.
 - [New end margins can be hidden by CUPS caches or PAPPL generated attributes] → Check the real CUPS media metadata and document refreshing an existing queue's cached media. Do not replace user margins at runtime.
 - [Trailing raster ink is discovered after transfer begins] → Preserve no-finalization and recovery-required behavior; buffering an entire page solely to reject earlier is unnecessary.
 
 ## Migration Plan
 
-Implement and verify locally under the apply workflow. Prepare the six-label gate with concrete fixtures and commands, then obtain authorization before any physical output. Access `vault` through pfa's SSH connection and use an isolated candidate; retain the original service image/configuration. Finish any healthy open run before changing services. Restore the original service after testing, and report whether the length and marker measurements passed.
-
-Update README and acceptance documentation to distinguish total page length from transmitted print area and explain new P710BT fit/minimum-length rejection. Sync specs and archive only after required validation is complete. Keep work local until then; production rollout is separate from this planning request.
+Implement and verify locally under the apply workflow. Update README to distinguish total page length from transmitted print area and explain new P710BT fit/minimum-length rejection. Record software checks and their limits without adding a hardware acceptance task. Sync specs and archive once software implementation, checks, and review are complete, then use the configured delivery path. Physical validation by the user is separate and does not block completion.
 
 ## Cut Pass
 
-Removed the draft physical stage that would leave a final none page held and need an extra terminal job. The final stage now closes the run within the six-label bound; none remains covered by existing software checks. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
+Removed the entire six-label physical gate, its preparation and execution tasks, tape budget, ruler measurements, service restoration steps, and physical acceptance record per the user's explicit decision. Retained software reconstruction of the same length and placement cases. Rejected calibration settings, template offsets, a second print pipeline, added row counters, and a page buffer because the existing geometry, row index, and batch lifecycle suffice.
 
 Each retained mechanism, check, record, and task has a concrete authority below. Requirement names refer to this change's deltas unless identified as an existing contract.
 
@@ -100,14 +89,11 @@ Each retained mechanism, check, record, and task has a concrete authority below.
 | Reconstructed length and pixel assertions | label-rendering: Physical label length includes feed margins | Extend current decoders; row-count-only checks can pass while moving or shrinking ink. |
 | PT-2730 byte comparison | printer-device: PT-2730 regression | Compare existing captures; a test that merely completes can miss changed legacy bytes. |
 | Existing CUPS and container/image checks | label-rendering: Consistent model-specific media; project config apply guidance | Reuse existing suites; core-only checks miss PAPPL publication and placement. |
-| Six-label physical measurement | label-rendering: Reported 36 mm label; Joined pages and continuation | Six labels cover copies, mixed joined lengths, and continuation with a closed end; a single label misses boundary-dependent additions. |
-| Acceptance record with fixtures, captures, lengths, marker spans, and outcomes | Existing batch-printing: Hardware claims require integrated evidence | Extend the existing record; captures alone cannot establish physical length or 1:1 scale. |
+| Software validation record | User decision: physical validation is separate; label-rendering: Reported 36 mm label | Retain existing check output and reconstructed pixels/lengths; a pass/fail tally alone does not establish what was verified. |
 | Task 1.1 | server-architecture: Canonical physical media | One geometry change with boundary tests; separate per-callback constants can diverge. |
 | Task 1.2 | label-rendering: Advertised tape media is usable | One media-publication change with CUPS checks/docs; output-only correction leaves false capabilities. |
 | Task 2.1 | label-rendering: Default 1:1 PNG rendering does not discard image content | Extend existing preflight/tests/docs together; output-only trimming loses PNG ink or position. |
 | Task 2.2 | printer-device: Selected model controls the print protocol | One callback correction with raster/legacy checks; changing the height alone leaves transmitted rows inconsistent. |
 | Task 2.3 | Project config: adapter validation in the container | Extend the existing image smoke; a second harness duplicates it and omitting it misses deployed integration. |
 | Task 3.1 | Project config apply guidance; printer-device: PT-2730 regression | Run required integration checks once after implementation; core compilation alone does not demonstrate adapter behavior. |
-| Task 3.2 | User request: printed length matches template; existing hardware acceptance workflow | Prepare the bounded gate in the current workflow; improvised printing has no fixed fixtures or measurement expectations. |
-| Task 3.3 | label-rendering: Physical label length includes feed margins | Measure the prepared labels and restore services; software captures cannot verify actual cuts and feed. |
-| Task 3.4 | Repository OpenSpec lifecycle and cut-pass instructions | Reconcile and validate before syncing/archive; premature archival misstates incomplete physical verification. |
+| Task 3.2 | User decision: no physical acceptance check; repository OpenSpec lifecycle and cut-pass instructions | Reconcile software evidence and its limits before syncing/archive; retaining a physical prerequisite blocks the user's chosen software-only completion. |
