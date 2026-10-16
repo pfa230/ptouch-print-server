@@ -2,14 +2,15 @@
 
 ## Why
 
-An unfinished chain leaves its last label attached, and clients need to release it without printing another label. Expose an explicit printer action over IPP that feeds only as needed and cuts the held end.
+An unfinished chain leaves its last printed label attached. Clients need an explicit IPP action to release it without supplying or printing more visible content. The 2026-10-16 PT-P710BT Bluetooth test proved that one white raster row in chain mode releases the preceding label; standalone and zero-raster candidates did not.
 
 ## What Changes
 
-- Add a documented, implementation-defined `Ptouch-Cut` IPP printer operation, discoverable through `operations-supported`, with no document or job creation.
-- Release a healthy held label or joined strip through a verified Brother cut-only sequence on PT-2730 and PT-P710BT, using the configured USB or Bluetooth transport.
-- Reuse exclusive device ownership and the existing closed/open/uncertain run state: busy requests fail immediately, a closed run needs no action, and ambiguous cut results require the existing recovery procedure.
-- Supply a numeric `ipptool` example and verify physical release without new raster, replay, or a blank helper label. Existing finishing presets and defaults remain as specified.
+- Expose project-local `Ptouch-Cut` (`0x5f01`) on PT-P710BT queues through `operations-supported`, with no submitted document or IPP job.
+- Send the verified one-row blank continuation through the configured USB or Bluetooth transport, preserving the printer buffer and using the loaded tape width. This intentionally permits an internal blank page rather than promising a raster-free cutter command.
+- Distinguish an open run holding user content from the open blank tail left after release. Repeated cuts do nothing until another printed label is held; subsequent printing continues without initialization.
+- Reuse PAPPL device ownership, current status, checked transfers, and uncertain-output recovery. Explicit cuts bypass automatic idle-poll throttling.
+- Supply a numeric `ipptool` example, exact protocol/IPP tests, and retained physical evidence. Ordinary finishings, defaults, media geometry, and PT-2730 printing remain unchanged.
 
 ## Capabilities
 
@@ -19,11 +20,11 @@ None.
 
 ### Modified Capabilities
 
-- `printer-device`: Direct IPP cut action, its device-access and failure contract, physical evidence, and Bluetooth connection lifetime during an explicit cut.
-- `server-architecture`: A bounded custom printer action alongside ordinary IPP printing, reusing device ownership and run state rather than introducing another job path.
+- `printer-device`: Model-scoped direct cut operation, blank continuation, device access, evidence, and Bluetooth/idle-poll behavior.
+- `server-architecture`: An IPP action outside job submission and a distinction between held user content and the remaining blank continuation.
 
 ## Impact
 
-`src/main.c` registers PAPPL's operation callback; `src/driver.c` and `src/driver.h` handle printer state, device ownership, status, transfer, and response; `src/protocol.c` and `src/protocol.h` own any additional Brother command bytes. Extend existing protocol/driver/IPP tests, update README client instructions, and retain cut-only hardware evidence in `tests/`. A narrow pinned PAPPL correction and both Dockerfiles must publish the additional operation alongside the framework's standard operation list without duplicate attributes.
+`src/main.c` registers the operation callback; `src/driver.c` and `src/driver.h` own request handling and run state; `src/protocol.c` and `src/protocol.h` provide the small sequence using existing builders. A narrow PAPPL 1.4.11 advertisement correction is applied in both Dockerfiles. Extend existing protocol and adapter tests, README client instructions, and the hardware evidence in `tests/`.
 
-The IPP operation is a project extension, not a standard finishing or a generic print-dialog option. PAPPL remains pinned; its public operation callback and device APIs are the intended integration points. Exact standalone Brother bytes and completion semantics remain unverified; implementation must resolve that specific question on hardware before claiming the capability works. No production configuration change or physical output is authorized by this proposal.
+Initial operation support is PT-P710BT only. PT-2730 does not advertise it and rejects it as unsupported. P710BT USB and Bluetooth use identical bytes; direct physical proof currently covers 12 mm tape over Bluetooth on the Pi at `ptouch-bt.iot.pfa.name`. This is not a claim of integrated IPP hardware acceptance or physical certification of other widths/transports. No further physical output or deployment is required to finish this change's implementation tasks.

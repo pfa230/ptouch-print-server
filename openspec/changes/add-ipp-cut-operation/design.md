@@ -2,108 +2,120 @@
 
 ## Context
 
-See proposal.md for motivation. Current printing ends an unfinished batch by sending FF and recording `PT_RUN_OPEN`; `pt_print_pending` finalizes a current label by disabling chain mode before EJECT. That does not establish a working cut-only sequence after FF. `tests/CUT-PROBE.md`, under Earlier probes, records standalone EJECT attempts that did not release the label.
+See proposal.md for motivation. Ordinary FF completion leaves an open run; final chain-off/EJECT closes it. On 2026-10-16, the Pi's PT-P710BT over Bluetooth printed and cut a normal marked label successfully, but both chain-off/EJECT alone and a 239-byte initialized zero-raster page failed to release a held label. The operator then proposed a minimum blank continuation and confirmed that it released the previous marked label.
 
-`src/main.c` builds one PAPPL system and configured queue. `src/driver.c` already owns checked device writes, transport-specific status reads, and a mutex-protected closed/open/uncertain run state. Status polling uses `papplPrinterOpenDevice` and `papplPrinterCloseDevice`. Inspection of pinned PAPPL 1.4.11 confirms that OpenDevice reserves maintenance access under the printer lock and returns NULL when a job or another device user owns the printer. The printer IPP dispatcher calls `papplSystemSetOperationCallback`'s callback for otherwise unsupported operations.
+The successful 57-byte payload on 12 mm tape was:
 
-PAPPL creates `operations-supported` in its base printer attributes and copies driver attributes separately into responses. Merely adding the same attribute from the driver would duplicate it. A small dependency correction is needed for truthful discovery, in addition to the application handler.
+```text
+1b696101 1b692100 1b697a84000c00010000000100
+1b694d40 1b694b00 1b69640e004d02
+4711000f 00000000000000000000000000000000 0c
+```
+
+It selects raster mode and automatic status, declares one continuation row, enables auto-cut and chain mode, retains the 14-dot margin and PackBits compression, sends sixteen white bytes as one literal row, and ends with FF. It sends no invalidate or initialize. Status progressed through printing (type 6, phase 1), print-completed (type 1), and receiving-ready (type 6, phase 0), with zero error bits. Physical release was confirmed by the operator. The raster row is 0.141 mm at 180 dpi; total tape feed and blank tail length were not measured.
+
+Evidence is recorded in local diagnostic commit `9e239ae`, `tests/CUT-ONLY-PREP.md`, and `/tmp/ptouch-cut-only-20261016-bt-evidence/blank-chain-label.jsonl`. The original Pi service was restored. The bytes above make this proposal independent of temporary files. Direct wire proof is distinct from the future IPP handler's software validation.
+
+PAPPL 1.4.11 owns the queue and scheduling. Its public `papplPrinterOpenDevice` reserves maintenance ownership and returns NULL both for contention and an open failure. The operation callback receives unsupported printer operations. PAPPL's base `operations-supported` and driver attributes are copied separately, so adding another attribute alone would duplicate discovery.
 
 ## Goals / Non-Goals
 
-**Goals:** One synchronous device action using existing ownership and recovery, with exact documented wire semantics and physical evidence for each supported model/transport.
+**Goals:** Release held user content through one IPP action, use the tested minimum-raster continuation, and preserve safe subsequent printing and repeat requests.
 
-**Non-Goals:** A maintenance command framework, another spooler, changing finishing defaults, a web button, automatic idle cutting, arbitrary raw command submission, or persistent command history.
+**Non-Goals:** A raster-free cutter promise, PT-2730 cutter support, changes to ordinary finishing defaults, another spooler, a web UI, arbitrary raw commands, feed options, or further hardware experiments in this change.
 
 ## Decisions
 
-### 1. One printer operation with no custom request attributes
+### 1. One model-scoped printer operation
 
-Use project-local operation `Ptouch-Cut`, numeric `0x5f01`, at the existing queue URI. Requests carry the standard charset, natural language, printer URI, and optional requesting user, with no document data or job attributes. The operation has no feed-length, copy-count, or force option. Document its implementation-defined status: the numeric code is a local vendor extension, not an IANA-assigned standard operation. IPP reserves 0x4000–0x7fff for such extensions ([RFC 8011 sections 5.4.15 and 7.8](https://www.rfc-editor.org/rfc/rfc8011.html#section-7.8)).
+Use implementation-defined `Ptouch-Cut`, numeric `0x5f01`, at the configured queue URI. Use standard IPP charset, natural-language, target, and optional requesting-user attributes, with PAPPL's configured access policy. Reject documents and job attributes before device output. Register the callback in `system_cb`; keep private state and handling in `driver.c` through `driver.h`. Other operations remain PAPPL's responsibility.
 
-Register the callback in `system_cb`; keep handling and access to private run state in `driver.c`, exposed through `driver.h`. Use PAPPL's request/response and configured authorization APIs. Unrelated operations remain PAPPL's responsibility. Reject document payloads and invalid targets before output.
+Advertise and accept the action only for PT-P710BT. PT-2730 returns `server-error-operation-not-supported` and keeps existing print bytes. The numeric value is a project-local vendor extension, not an IANA-assigned standard operation; standard print dialogs need not expose it. An empty job adds document processing to a direct device action, and an HTTP route would not provide the requested IPP interface.
 
-Alternative: an empty print job with trim would add document/job processing to a direct printer action. A new HTTP route would not provide the requested IPP interface.
+### 2. Reuse the successful blank continuation
 
-### 2. Publish one complete operation list
+Build the sequence above with existing protocol builders and model/tape information. The only variable in the captured payload is the confirmed loaded tape width. Use a small pure protocol helper rather than a document renderer or a configurable page generator. Do not initialize, invalidate, send EJECT, or replay any user raster. Keep exactly one white row, the existing 14-dot margin, continuation page flag 1, auto-cut on, chain on, and FF. This is the chosen mechanism, not an automatic fallback after trying failed commands.
 
-Declare the extra operation from the driver. Add a bounded PAPPL 1.4.11 patch that combines this additional enum with the framework's existing operations in a single `operations-supported` response, preserving every standard operation. Apply it in both Dockerfiles and document the correction and removal criterion in `patches/README.md`: remove it when the pinned dependency can advertise additional operations correctly through supported APIs. Do not replace or clone the framework's standard operation list in application code, and do not add a new extension registration framework.
+Send directly through the configured printer device; do not submit the internal page through IPP, filters, the job scheduler, or client media-length validation. Preserve current ordinary page geometry and the P710BT length correction in main commit `6e7fc07`. Tests must prove those ordinary print captures stay unchanged. USB and Bluetooth use the same sequence; only Bluetooth/12 mm currently has direct physical proof.
 
-Alternative: a second attribute of the same name gives ambiguous capabilities; a hardcoded copy of PAPPL's list drifts when the dependency changes.
+Zero rows would be simpler but failed physically. One literal white row reuses the production PackBits encoding without introducing an alternative zero-line opcode.
 
-### 3. Own the device before interpreting the run
+### 3. Keep physical continuation separate from held user content
 
-Acquire the configured queue's device through `papplPrinterOpenDevice` and keep ownership through the final state update. Check the existing recovery latch and run state under that ownership. Reuse the current state mutex without holding it across PAPPL calls. Device contention returns `server-error-busy` immediately; an idle open failure or unusable live status returns `server-error-device-error`. A known closed run is a successful no-op after exclusive access is obtained. An uncertain run fails with the existing recovery instruction.
+Extend the existing run enum with one state, `PT_RUN_OPEN_BLANK`, rather than adding a separate flag or request history:
 
-For a healthy open run, confirm clean live media without reset or initialization. Honor cassette invalidation from the existing status path and recheck run state afterward; do not cut an end the server no longer knows to be held. Set the existing state to uncertain immediately before the first output-changing cut command. Use checked writes and a bounded completion wait; set closed only on confirmed success. Repeated requests after success then do nothing. Failed or disconnected responses do not trigger retries.
+| State | Meaning | Ptouch-Cut behavior |
+| --- | --- | --- |
+| CLOSED | No known open run | Successful no-op after ownership |
+| OPEN | Healthy run holding user content | Send the blank continuation |
+| OPEN_BLANK | Healthy run after releasing user content, with only the blank continuation held | Successful no-op after ownership |
+| UNCERTAIN | Partial or unconfirmed output | Refuse with the existing recovery instruction |
 
-Status reads must not let a prior page's completion satisfy the cut's completion wait. Preserve the existing draining of preceding notifications. Derive the cut's expected completion sequence from actual model behavior rather than assuming that print-completed alone, or the successful write itself, proves a cut.
+On confirmed action completion, set OPEN_BLANK, not CLOSED. Both open states count as continuation for the next real batch, so it uses normal continuation page settings and mandatory precut without initialization. FF for new user content sets OPEN again; a normal terminal cut sets CLOSED. Rejected or canceled jobs that emit no output preserve either healthy open state. Existing media invalidation clears either open state while preserving uncertainty. State remains process-local, as today.
 
-Alternative: checking idle state before taking ownership races with a newly scheduled job; a new mutex alone would not serialize with PAPPL's scheduler. Queuing cuts could cut a different later label. Request identifiers and deduplication records are unnecessary because known closed state already handles repeats after success, and uncertain state blocks ambiguous retries.
+CLOSED would falsely represent a physically open blank page and cause fresh-run initialization. OPEN would make every repeated request send another blank page. A fourth enum value provides both continuation and repeat no-op without two independently synchronized fields. The next batch may separate the remaining blank tail through its ordinary mandatory precut; do not promise zero total blank-tape consumption.
 
-### 4. Resolve the Brother sequence within the protocol boundary
+### 4. One exclusive action with existing failure handling
 
-Use primary Brother protocol documentation and the retained probe evidence to identify the model's feed/cut action after a completed chain FF. Any additional bytes belong in `protocol.c`, with pure builder coverage in `test_protocol`. The adapter uses the configured model and existing USB/Bluetooth connection; it sends no page header, raster, synthetic FF page, or initialization to make the cutter work. Reuse job transfer/readiness helpers at printer scope only where needed by the new action.
+Acquire `papplPrinterOpenDevice` before inspecting or updating private run state. Keep ownership through live media confirmation, transfer, completion, and final state update. Use the existing state mutex, never holding it across PAPPL calls.
 
-The concrete bytes and completion replies are implementation prerequisites to verify, not evidence already supplied by the proposal. If either model cannot cut its held end without a helper print, stop with the captured failure; do not silently change the contract or add a blank-label fallback. Model-specific command bytes, if required, stay within the existing model distinction.
+If OpenDevice returns NULL, return `server-error-busy` with a message that the printer is busy or unavailable. This deliberately covers both contention and inability to open: PAPPL does not distinguish them through this API. It avoids another ownership flag or a check-then-open race. Once ownership is acquired, unusable/error live status returns `server-error-device-error`. An uncertain run fails without output; CLOSED and OPEN_BLANK succeed without feed/cut bytes. There is no deferred action or automatic retry.
 
-### 5. Verify through existing fixtures and a bounded physical check
+For OPEN, drain preceding notifications and confirm clean, supported loaded media without resetting the device. Reuse cassette/media invalidation and recheck state before output. Set UNCERTAIN immediately before the first page-setup write. Use existing checked transfers and bounded packet assembly, refactored to printer scope only where necessary. Wait for the current page's receiving-ready notification (type 6, phase bytes 0/0/0); print-completed alone is insufficient. On confirmed completion set OPEN_BLANK; on any partial output, status error, timeout, or link loss retain UNCERTAIN. A lost successful client response then needs no special deduplication record.
 
-Extend `test_protocol` and `test_driver`; use the driver's existing IPP test server and simulated device for real numeric operation requests, emitted-byte checks, deterministic ownership races, status fragmentation, and injected failures. Cover both held policies, closed repeats, busy rejection, offline/fault/uncertain refusal, malformed requests, and failed transfer/completion. Check discovery returns one complete operation list and no job is created. Preserve existing print captures and finishing/default tests. P710BT cut bytes must match between USB and Bluetooth fixtures.
+Explicit cuts are active user operations, exempt from `PTOUCH_IDLE_POLL_SECONDS`, including zero. Their reads neither consume nor reset the automatic idle-poll slot. The Bluetooth connection is owned only for the action and closed afterward under the existing device lifetime policy; USB fallback is forbidden.
 
-Add a numeric `ipptool` request file in `tests/` and a README invocation. Use the same request for integrated hardware acceptance and save results in one cut-only acceptance document in `tests/`.
+### 5. Truthful discovery and bounded validation
 
-Prepare the acceptance procedure before physical output and obtain approval for the concrete procedure. The integrated check uses 12 mm tape and three complete labels per configuration: PT-2730 USB, P710BT USB, and P710BT Bluetooth, nine labels total. Per configuration: print one chain-only label, wait until idle, cut and observe its release, repeat the cut and observe no feed, then print two labels with none and cut their joined strip. The second batch also checks fresh-run startup after a successful cut. On Bluetooth, let the idle connection close before cutting and verify there is no USB access. Record the exact commands, status sequence, physical separation, and measured extra feed; allow necessary cutter travel but no new blank label or replay. Stop at the first failure without automatic reprints. Additional diagnostic labels require a separately bounded procedure.
+Add a narrow PAPPL 1.4.11 correction that merges driver-provided additional operation enums into the existing `operations-supported` response once, preserving all standard operations and requested-attribute filtering. The driver contributes 0x5f01 only for P710BT. Apply the patch in both Dockerfiles and document its purpose/removal criterion in `patches/README.md`. Do not clone PAPPL's operation list or create an extension registry.
+
+Use existing protocol tests and the adapter's real IPP/socket-device fixtures. Cover exact white-row bytes, both transports, both held-content policies, CLOSED/OPEN_BLANK no-ops, a next real batch after release, a later cut after new content, and unchanged ordinary print captures. Exercise printing/polling/cut contention deterministically, failed opens, stale/fragmented statuses, malformed requests, access denial, media changes, and transfer/completion failures. Confirm one complete operation list, conditional model discovery, no new jobs, no saved raster, and explicit cuts with polling disabled/rate-limited.
+
+Add one numeric `ipptool` request and README invocation, and retain the existing direct physical result with the failed candidates clearly distinguished. Run the documented request against the simulated server. Core and pinned adapter checks establish implementation behavior; today's direct P710BT Bluetooth observation establishes the physical mechanism. Do not turn the old unapproved nine-label/three-configuration plan into a prerequisite. Additional end-to-end hardware certification, if later requested, needs its own bounded procedure; it is not an unchecked task here.
 
 ## Risks / Trade-offs
 
-- [Standalone finalization has failed before] → Keep physical success mandatory and retain actual wire/status evidence; socket success is only software evidence.
-- [A cut begins while another action starts] → Reserve the device through PAPPL and keep ownership through the state transition; deterministic contention tests must prove non-interleaving.
-- [A cut response is lost after physical output] → Confirmed success leaves closed state; uncertain completion uses the existing recovery latch. Do not promise exactly-once behavior across restart or client resubmission.
-- [Bluetooth reconnect changes the printer session] → Exercise the idle reconnect explicitly; fail the acceptance check if the held end cannot be released.
+- [One white row does not imply 0.141 mm total feed] → Document the 14-dot margin, unmeasured mechanical feed, and remaining blank tail; provide no feed-length option or waste-free claim.
+- [Repeated requests could consume tape] → OPEN_BLANK makes repeats no-ops while preserving physical continuation.
+- [A request races with printing or polling] → Use PAPPL ownership through the complete transition and test contention; do not queue the cut.
+- [Output completion is ambiguous] → Preserve the existing uncertain-output recovery and never replay automatically.
+- [Direct evidence is narrower than software support] → Document P710BT Bluetooth/12 mm physical proof separately from USB/other-width captures and integrated IPP checks.
 
 ## Migration Plan
 
-No configuration or client migration is required for ordinary printing. During apply, run the repository's core CMake/CTest checks and the full pinned adapter container build. Deploy only the isolated candidate needed for an authorized hardware check; use pfa's SSH connection to vault for any requested configuration changes there. Keep existing deployments available for restoration. Publish documentation of physical support only after the acceptance task passes. Rolling back removes the extra operation; finish or recover a held run before restarting either version, as required today.
+Implement on the current main baseline, retaining its ordinary label-length and finishing behavior. No production configuration changes are needed. This proposal update does not resume the stopped loop or deploy a candidate. Removing the custom operation is the rollback; finish or recover a held run before restarting, under the existing recovery policy. The new state is not persisted.
 
 ## Cut pass
 
-The final plan excludes empty jobs, helper labels, a separate HTTP endpoint, a command queue, automatic retries, request-deduplication storage, new run-state fields, feed-length/force options, a web UI, and a generic maintenance framework. None is needed for the requested direct IPP cut. No project code was changed in this proposal.
+Removed: the disproved no-raster/no-blank-page restriction, claims of a terminal EJECT/closed physical run, unproven PT-2730 cutter support, the nine-label approval/acceptance gate, model-protocol exploration tasks, and a separate busy-versus-open-failure tracking mechanism. Reuse the current scheduler, transports, status parser, protocol builders, mutex, idle-poll slot, and recovery latch. Add no retry, queue, raw-command option, feed control, persistent request record, or generic maintenance framework.
 
-Each retained item below serves the named delta requirement or explicit workflow request; the final column identifies the simpler alternative and its concrete failure. Existing mechanisms are reused rather than duplicated.
-
-| Item retained | Requirement or request served | Simpler alternative and failure |
+| Item retained | Requirement or explicit request served | Simpler alternative and concrete failure |
 | --- | --- | --- |
-| One numeric printer operation and PAPPL callback | Direct IPP cut action | Omit it: clients cannot request the action over IPP. |
-| Standard charset attribute | Direct IPP cut action, ordinary IPP request syntax | Omit it: malformed IPP request. |
-| Standard natural-language attribute | Direct IPP cut action, ordinary IPP request syntax | Omit it: malformed IPP request. |
-| Standard printer URI and target validation | Direct IPP cut action | Omit it: no valid queue target. |
-| Existing configured access check | Direct IPP cut action | Bypass it: the extension can evade configured server access. |
-| Reject document data | Direct IPP cut action | Accept it: an input promised to be document-free silently discards data. |
-| Single operation-list merge and pinned patch | Direct IPP cut action, discovery scenario | Driver attribute alone: duplicate operations-supported; copied base list: dependency drift. |
-| Both Dockerfile patch applications | Direct IPP cut action, discovery scenario | Patch one build: the other image advertises a different capability set. |
-| Existing exclusive device ownership | Direct cuts use exclusive device access | Idle-state check alone races with a newly scheduled print. |
-| Immediate busy/error response | Direct cuts use exclusive device access | Defer execution: a later label can be cut unexpectedly. |
-| Existing clean-media refresh and cassette invalidation | Direct cuts use exclusive device access | Trust cached status: cut against a fault or an invalidated held run. |
-| Existing run state, including closed no-op and uncertain latch | Healthy continuation; Direct cuts use exclusive device access | Unconditional cut/retry can feed again or act on uncertain output. |
-| Existing state mutex | Cut action reuses printer ownership and recovery | Unsynchronized reads race with status updates. |
-| Existing model selection | Cut-only support requires physical evidence | Assume identical model behavior: historical evidence does not establish that. |
-| Protocol command builder | Cut action reuses printer ownership and recovery; existing Pure protocol core | Inline bytes in the adapter duplicate the protocol boundary. |
-| Checked output transfer | Cut action reuses printer ownership and recovery | Buffered-write success can precede a failed device transfer. |
-| Bounded, current-command completion check | Cut action reuses printer ownership and recovery | Successful write or a stale page notification cannot establish cut completion. |
-| Bluetooth action connection lifetime | PT-P710BT can use Bluetooth instead of USB | Exclude explicit cuts from allowed lifetime: the action cannot reconnect after idle. |
-| Exact-byte and transport-equivalence checks | Cut-only support requires physical evidence; PT-P710BT can use Bluetooth instead of USB | Response-only assertions miss new raster or transport-specific output. |
-| Deterministic contention checks | Direct cuts use exclusive device access | Sequential tests do not establish exclusion during scheduler races. |
-| Injected malformed/status/transfer/failure checks | Direct IPP cut action; Direct cuts use exclusive device access | Happy-path tests miss unintended output and unsafe replay. |
-| Existing print regression checks | Healthy continuation; existing Explicit batch policies and Strict physical rendering | New-operation tests alone miss changed ordinary printing. |
-| Numeric ipptool fixture and README invocation | Direct IPP cut action; user's request for an IPP interface | A symbolic custom name alone is unknown to stock clients. |
-| One physical acceptance document | Cut-only support requires physical evidence | Software capture alone does not prove release; reuse one document for procedure and results. |
-| Nine-label physical matrix and extra-feed observation | Cut-only support requires physical evidence | One model/transport or only single labels leaves another promised action unverified. |
-| Existing core and full adapter builds | Repository's explicit validation instructions | Core-only checks do not compile or execute PAPPL handling. |
-| Strict OpenSpec validation | User's openspec-propose request | File existence alone does not validate delta structure. |
-| Task 1.1: protocol candidate, builder tests, and source notes | Direct IPP cut action; Cut-only support requires physical evidence | Reuse EJECT without investigation: prior standalone attempts failed. |
-| Task 2.1: handler and behavioral tests | Direct IPP cut action; Direct cuts use exclusive device access | Builder-only work exposes no usable printer action. |
-| Task 2.2: discovery correction and its tests/docs | Direct IPP cut action, discovery scenario | Callback alone leaves discovery incomplete. |
-| Task 2.3: runnable client example and its check | Direct IPP cut action | Undocumented numeric extension is not practically callable by users. |
-| Task 3.1: integrated software checks | Repository's explicit validation instructions | Separate unit successes miss pinned-library integration failures. |
-| Task 3.2: concrete physical procedure and authorization | Cut-only support requires physical evidence; planning-only request | Unbounded or unapproved physical execution exceeds this proposal's authorization. |
-| Task 3.3: physical execution and retained results | Cut-only support requires physical evidence | A prepared procedure is not evidence that the cutter works. |
+| Numeric operation and callback | Direct IPP cut action | No callback leaves no IPP device action. |
+| Standard charset | Direct IPP cut action | Omission produces a malformed IPP request. |
+| Standard natural language | Direct IPP cut action | Omission produces a malformed IPP request. |
+| Target and job/document validation | Direct IPP cut action | Unchecked input can target the wrong queue or silently discard submitted print data. |
+| Existing configured access check | Direct IPP cut action | Bypassing it evades the server's access policy. |
+| P710BT-only discovery and rejection for other models | Cut support reflects physical evidence | Claiming both models promises an untested PT-2730 mechanism. |
+| One merged operation list and patch in both images | Direct IPP cut action | Driver attributes alone duplicate discovery; patching one image gives inconsistent capabilities. |
+| Existing exclusive device ownership | Direct cuts use exclusive device access | An idle precheck races with a scheduled job. |
+| Single busy response for failed acquisition | Direct cuts use exclusive device access | Separate busy/open errors need ownership state the public API does not expose. |
+| Existing mutex | Healthy continuation | Unlocked state updates race with status processing. |
+| Existing live media check/invalidation | Direct cuts use exclusive device access | Cached media can preserve a held run across cassette changes. |
+| One-row blank continuation helper | Direct IPP cut action; user's successful blank-label test | Zero rows failed physically; rendering a document adds a job/filter path. |
+| Existing fixed margin and white literal encoding | Direct IPP cut action | Changing the tested sequence loses its physical evidence; new encodings duplicate existing builders. |
+| OPEN_BLANK enum value | Healthy continuation | CLOSED causes initialization; OPEN repeats blank output. |
+| Existing uncertainty and checked transfer handling | Cut action reuses printer ownership and recovery | Write success alone cannot establish safe completion. |
+| Current-page bounded ready wait | Cut action reuses printer ownership and recovery | Stale ready or print-completed alone can falsely report success. |
+| Explicit-operation idle-poll exemption | Idle status polling is configurable | A zero polling interval would otherwise disable the Pi's cut action. |
+| Bluetooth action lifetime | PT-P710BT can use Bluetooth instead of USB | Job-only ownership cannot reconnect for an idle explicit action. |
+| Exact-byte/model/transport tests | Cut support reflects physical evidence | Response-only checks miss wrong media fields or nonwhite pixels. |
+| Repeat/continuation/failure/race tests | Healthy continuation; Direct cuts use exclusive device access | A single happy-path request misses tape-consuming repeats and interleaved output. |
+| Numeric ipptool fixture and README | User's requested IPP interface | A symbolic project-only operation name is unknown to stock clients. |
+| Existing physical record, retained under tests | Cut support reflects physical evidence | A socket response alone does not establish a physical cut. |
+| Task 1.1: helper and exact-byte tests | Direct IPP cut action | Reusing standalone EJECT repeats a failed mechanism. |
+| Task 1.2: run-state distinction and regression tests | Healthy continuation | The old three states cannot encode both blank continuation and repeat no-op. |
+| Task 2.1: IPP handler and behavior tests | Direct IPP cut action; Direct cuts use exclusive device access | Protocol-only work supplies no callable action. |
+| Task 2.2: discovery correction and checks | Direct IPP cut action | A handler alone does not advertise its capability truthfully. |
+| Task 2.3: example and evidence documentation | User's IPP request; Cut support reflects physical evidence | Undocumented numeric bytes are not a convenient client interface. |
+| Task 3.1: core/adapter/OpenSpec validation | Repository checks; user's proposal request | Unit success alone misses framework integration and malformed deltas. |

@@ -4,65 +4,77 @@
 
 ### Requirement: Direct IPP cut action
 
-The server SHALL expose the implementation-defined `Ptouch-Cut` printer operation (`0x5f01`) in `operations-supported`. A request targeting the queue SHALL release its healthy held label or strip without document data, job creation, raster replay, or a blank helper label. The operation SHALL require only the feed needed for the terminal cut and SHALL use the server's configured access policy.
+PT-P710BT queues SHALL advertise and accept project-local Ptouch-Cut (0x5f01) under the configured access policy. It SHALL release healthy held user content without a submitted document, IPP job, or replay. An internal one-white-row continuation is permitted; visible content SHALL NOT be printed. PT-2730 SHALL neither advertise nor implement the action. No user feed-length or force parameter SHALL be added.
 
 #### Scenario: Release the last chain label
-- **WHEN** an authorized client sends Ptouch-Cut to an idle printer holding the last label of a healthy chain
-- **THEN** the printer releases that label with one terminal cut, no new label is printed, and the response is successful only after transfer and device completion are confirmed
+- **WHEN** an authorized client sends Ptouch-Cut to an idle P710BT holding the last label of a healthy chain
+- **THEN** a minimum-raster blank continuation releases that label, leaves the blank page unfinished, and returns success only after checked transfer and current-page receiving-ready confirmation
 
 #### Scenario: Release a joined strip
 - **WHEN** Ptouch-Cut targets a healthy held strip printed with finishings none
-- **THEN** the strip is released by one terminal cut without introducing cuts between its labels
+- **THEN** it releases the strip without introducing cuts between its user labels or replaying their content
 
 #### Scenario: Discover the extension
-- **WHEN** a client requests operations-supported
-- **THEN** one attribute lists 0x5f01 alongside the standard operations, and client documentation identifies it as a project extension
+- **WHEN** a client requests operations-supported on P710BT
+- **THEN** one complete attribute lists 0x5f01 alongside the standard operations, and documentation identifies it as a project-local extension
+
+#### Scenario: Unsupported model
+- **WHEN** a PT-2730 queue is queried or receives Ptouch-Cut
+- **THEN** discovery omits 0x5f01, the action returns server-error-operation-not-supported without device output, and ordinary printing remains unchanged
 
 #### Scenario: Invalid or unauthorized request
-- **WHEN** the request has document data, lacks a valid printer target, or fails the configured access policy
-- **THEN** it is rejected with an appropriate IPP or HTTP error before any cut command is sent
+- **WHEN** the request contains document data or job attributes, lacks a valid printer target, or fails the configured access policy
+- **THEN** it is rejected with an appropriate IPP or HTTP error before device output
 
 ### Requirement: Direct cuts use exclusive device access
 
-The cut action SHALL execute synchronously through the configured printer transport under exclusive device ownership. Busy requests SHALL fail immediately without deferred execution. A known closed run SHALL succeed without feeding or cutting. Uncertain output SHALL reject the action. Offline or faulted hardware SHALL return an error rather than retain a pending cut.
+The action SHALL execute synchronously through the configured transport under exclusive device ownership. Failed acquisition, whether busy or unavailable, SHALL return server-error-busy without deferred execution. CLOSED or healthy blank-only runs SHALL succeed without feed/cut output once owned. Uncertain output SHALL be refused. Faulted or unusable live status on an acquired device SHALL return server-error-device-error.
 
 #### Scenario: Printing or maintenance owns the device
-- **WHEN** a cut request races with printing, polling, or another cut and cannot obtain exclusive device ownership
-- **THEN** it returns server-error-busy without adding a job or sending cut bytes, and no cut runs later on its behalf
+- **WHEN** a cut cannot obtain ownership because printing, polling or another cut owns the device
+- **THEN** it returns server-error-busy without adding a job or sending page output, and no action runs later on its behalf
 
 #### Scenario: Repeated request after success
-- **WHEN** the run is already known closed and the device is otherwise idle
-- **THEN** Ptouch-Cut succeeds without feed or cut output, including when repeated after a lost successful response
+- **WHEN** only the healthy blank continuation remains after a successful release, or the run is known closed
+- **THEN** the next owned cut request succeeds without new raster, feed or cut output, including after a lost successful response
 
-#### Scenario: Printer unavailable before cutting
-- **WHEN** the configured printer cannot be opened or clean loaded-media status cannot be confirmed for an open run
-- **THEN** the request returns a device-unavailable error without a cut, a queued retry, or transport fallback
+#### Scenario: Printer cannot be opened
+- **WHEN** the configured printer cannot be opened
+- **THEN** the request returns server-error-busy with a busy-or-unavailable explanation, without a queued retry or transport fallback
+
+#### Scenario: Live status is unusable
+- **WHEN** ownership succeeds but an open run's clean loaded-media status cannot be confirmed
+- **THEN** the action returns server-error-device-error without sending its blank continuation
+
+#### Scenario: Media invalidates the held run
+- **WHEN** live confirmation invalidates the preceding run because the cassette changed
+- **THEN** the action rechecks that state and sends no blank continuation for the invalidated held end
 
 #### Scenario: Output already uncertain
-- **WHEN** an earlier transfer or completion failure has latched recovery required
-- **THEN** Ptouch-Cut fails with the existing power-cycle-then-restart recovery instruction and sends no cut command
+- **WHEN** earlier output has latched recovery required
+- **THEN** Ptouch-Cut fails with the existing power-cycle-then-restart instruction and sends no page output
 
 #### Scenario: Cut outcome becomes uncertain
-- **WHEN** cut command transfer is incomplete or its completion cannot be confirmed
-- **THEN** the response reports failure, the run stays uncertain, and neither repeated requests nor cleanup replay the cut
+- **WHEN** transfer is incomplete, status reports an error, or current-page receiving-ready cannot be confirmed
+- **THEN** the request fails, the run remains uncertain, and repeated requests and cleanup emit no replay
 
-### Requirement: Cut-only support requires physical evidence
+### Requirement: Cut support reflects physical evidence
 
-PT-2730 and PT-P710BT cut-only support SHALL require integrated physical evidence that a held label and a joined strip are released without new raster data or a blank label. PT-P710BT SHALL be checked over USB and Bluetooth. Software captures SHALL establish emitted bytes and failure behavior; successful transfer alone SHALL NOT establish physical cutting.
+Documentation SHALL distinguish direct physical release evidence from software captures and integrated IPP checks. Initial direct proof SHALL identify PT-P710BT, Bluetooth and 12 mm tape, the white-row sequence, zero error bits and operator-confirmed release. USB/other-width captures SHALL NOT be described as physical certification. A successful write alone SHALL NOT establish cutting or measured tape consumption.
 
-#### Scenario: Standalone command has no physical effect
-- **WHEN** an apparently successful command transfer leaves the label attached
-- **THEN** the hardware check fails and cut-only support is not claimed; printing a helper label does not satisfy the requirement
+#### Scenario: Candidate has no physical effect
+- **WHEN** successful command transfer leaves the label attached
+- **THEN** it is recorded as a failed candidate rather than proof of a cut; the unsuccessful zero-raster candidates are distinguished from the successful blank-row mechanism
 
-#### Scenario: Physical acceptance succeeds
-- **WHEN** each supported model and transport passes the integrated cut-only check
-- **THEN** retained evidence identifies the command sequence, completion status, actual release, extra feed, and absence of a new blank label
+#### Scenario: Evidence retained for the selected mechanism
+- **WHEN** documenting the selected blank continuation
+- **THEN** retained evidence includes exact bytes, print-completed and receiving-ready statuses, and the operator's release confirmation, while stating that total feed and blank tail length were not measured
 
 ## MODIFIED Requirements
 
 ### Requirement: PT-P710BT can use Bluetooth instead of USB
 
-When `PTOUCH_BT_ADDRESS` is set, the server SHALL reach the selected PT-P710BT only over Bluetooth at that address and SHALL NOT use or fall back to USB. It SHALL send the same print and cut-only protocol as over USB, hold the connection only while jobs are queued, an idle status read runs, or an explicit cut action executes, and treat an unreachable printer as offline. An address with another model, or a malformed address, SHALL fail startup.
+When `PTOUCH_BT_ADDRESS` is set, the server SHALL reach the selected PT-P710BT only over Bluetooth at that address and SHALL NOT use or fall back to USB. It SHALL send the same print and explicit-cut protocol as over USB, hold the connection only while jobs are queued, an idle status read runs, or an explicit cut action executes, and treat an unreachable printer as offline. An address with another model, or a malformed address, SHALL fail startup.
 
 #### Scenario: Bluetooth printer in range
 - **WHEN** PT-P710BT is selected with a Bluetooth address and the paired printer is on and in range
@@ -85,9 +97,37 @@ When `PTOUCH_BT_ADDRESS` is set, the server SHALL reach the selected PT-P710BT o
 - **THEN** startup fails with a configuration error naming the problem
 
 #### Scenario: Link lost during output
-- **WHEN** the Bluetooth link fails after page raster has started, including during finalization
-- **THEN** the existing uncertain-output recovery contract applies, cleanup sends nothing further, and a following job emits no raster until recovery
+- **WHEN** the Bluetooth link fails after page raster has started, including during finalization or an explicit cut action
+- **THEN** the existing uncertain-output recovery contract applies, cleanup sends nothing further, and following output is blocked until recovery
 
 #### Scenario: Explicit cut after the idle connection closed
-- **WHEN** a healthy held end survives an idle Bluetooth disconnect and Ptouch-Cut is requested
-- **THEN** the server reconnects to the configured address, confirms status without resetting the run, cuts without new raster, and releases its connection ownership afterward
+- **WHEN** a healthy held end survives idle Bluetooth disconnect and Ptouch-Cut is requested
+- **THEN** the server reconnects to that address, confirms live status without initialization, sends its blank continuation, and releases connection ownership after completion
+
+### Requirement: Idle status polling is configurable
+
+`PTOUCH_IDLE_POLL_SECONDS` SHALL control automatic idle status reads on every transport. Absent, idle reads SHALL follow PAPPL's status requests as before. `0` SHALL disable automatic idle device access. A positive integer SHALL set the minimum seconds between automatic idle access attempts, successful or not. Skipped reads SHALL keep the last published status. Job and explicit cut access SHALL be unaffected; cut access SHALL neither consume nor reset the idle-poll interval. Any other value SHALL fail startup.
+
+#### Scenario: Polling unset
+- **WHEN** `PTOUCH_IDLE_POLL_SECONDS` is absent
+- **THEN** idle status behavior is identical to the behavior before this setting existed
+
+#### Scenario: Polling disabled
+- **WHEN** `PTOUCH_IDLE_POLL_SECONDS` is `0` and clients query idle printer status
+- **THEN** automatic polling opens no device connection, and the next job still confirms live media before printing
+
+#### Scenario: Polling rate-limited
+- **WHEN** `PTOUCH_IDLE_POLL_SECONDS` is `300` and clients query the idle printer every few seconds
+- **THEN** the server reads live status at most once per 300 seconds and reports the last published status between reads
+
+#### Scenario: Rate limit with the printer unreachable
+- **WHEN** `PTOUCH_IDLE_POLL_SECONDS` is `300`, the printer is unreachable, and clients query the idle printer every few seconds
+- **THEN** automatic polling attempts at most one connection per 300 seconds
+
+#### Scenario: Invalid polling value
+- **WHEN** `PTOUCH_IDLE_POLL_SECONDS` is negative, fractional, or not a number
+- **THEN** startup fails with a configuration error
+
+#### Scenario: Explicit cut with polling disabled or rate-limited
+- **WHEN** Ptouch-Cut is requested while polling is disabled or its next automatic read is not due
+- **THEN** the action can acquire the device and confirm live media without waiting for, consuming or resetting the automatic idle-poll slot
