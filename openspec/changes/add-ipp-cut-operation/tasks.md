@@ -1,0 +1,17 @@
+# Tasks
+
+## 1. Brother cut-only protocol
+
+- [ ] 1.1 Identify the candidate standalone feed/cut sequence and expected completion for each supported model using primary protocol references and the failed sequences in tests/CUT-PROBE.md; add only the needed builders in src/protocol.c and src/protocol.h, cover exact bytes in test_protocol, and record sources and pending physical proof in the cut-only acceptance document. Completion requires passing builder tests and an explicit candidate sequence without page data or a helper label; physical success remains task 3.3.
+
+## 2. Direct IPP printer action
+
+- [ ] 2.1 Register Ptouch-Cut (0x5f01) using PAPPL's operation callback and implement it in the existing driver with exclusive device ownership, configured access policy, clean status confirmation, checked transfers, bounded completion, and existing run-state transitions. Extend test_driver with real IPP requests and deterministic device/status fixtures proving no job or raster is created, both held policies cut, closed repeats emit no feed/cut, and busy/offline/fault/uncertain/malformed requests and transfer/completion failures obey the delta specs; prove existing print bytes are unchanged and P710BT cut bytes match over USB and Bluetooth.
+- [ ] 2.2 Add the narrow pinned PAPPL operation-advertisement correction and apply it in both Dockerfiles; document its purpose and removal criterion in patches/README.md. Verify a real Get-Printer-Attributes response has exactly one operations-supported attribute containing the extension and all previously advertised operations, including an explicitly requested attribute query, and verify strict patch application in the adapter container build.
+- [ ] 2.3 Add a numeric ipptool cut request under tests/ and document its invocation, extension status, busy/error behavior, and recovery in README.md. Run the documented request against the simulated held-run server and verify a successful response, only expected status/cut bytes, and an unchanged job count; clearly mark physical support pending until task 3.3.
+
+## 3. Integrated validation
+
+- [ ] 3.1 Run cmake -S . -B build, cmake --build build, and ctest --test-dir build --output-on-failure; build the full pinned adapter container and run its CTest/IPP checks; run strict OpenSpec validation. Record results, including existing finishing/default, geometry, and continuation regressions, with software and hardware evidence distinguished.
+- [ ] 3.2 Prepare the concrete nine-label, 12 mm physical acceptance procedure from design.md in the cut-only acceptance document, including candidate setup/restoration, the three model/transport configurations, exact request and capture steps, expected completion, measured extra feed, and first-failure stop conditions. Present that procedure for approval before physical output; completion means the procedure is reviewable and its execution authorization is recorded.
+- [ ] 3.3 After approval, run the integrated acceptance procedure for PT-2730 USB, P710BT USB, and P710BT Bluetooth; retain commands/status, observed single-label and joined-strip release, repeat no-op, fresh-run behavior, and Bluetooth idle reconnect evidence in the acceptance document, and update README hardware claims to match results. Stop on the first failure without automatic reprints or a helper-label fallback; leave this task incomplete when physical evidence is missing or fails.
