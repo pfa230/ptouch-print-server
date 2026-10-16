@@ -26,7 +26,7 @@
  
    // Validate data...
    if (!validate_defaults(printer, data, data) || !validate_driver(printer, data) || !validate_ready(printer, data, data->num_source, data->media_ready))
-@@ -190,10 +200,33 @@
+@@ -190,10 +200,34 @@
    printer->driver_attrs = make_attrs(printer->system, printer, &printer->driver_data);
  
    if (attrs)

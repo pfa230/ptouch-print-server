@@ -343,8 +343,13 @@ static pappl_job_t *upload_png(pappl_printer_t *p, const char *finishing, int co
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
     png_write_info(png, info);
     unsigned char pixels[85]; memset(pixels, 255, sizeof pixels);
-    pixels[40] = pixels[41] = 0;
-    for (int i = 0; i < 180; i++) png_write_row(png, pixels);
+    /* The P710BT replaces its first and last rows with feed, so keep the marker
+     * inside the model's imageable along-tape window. */
+    int end = is_p710bt() ? PT_END_MARGIN_PX : 0;
+    for (int i = 0; i < 180; i++) {
+        pixels[40] = pixels[41] = (i >= end && i < 180 - end) ? 0 : 255;
+        png_write_row(png, pixels);
+    }
     png_write_end(png, info); png_destroy_write_struct(&png, &info); fclose(file);
     if (malformed) {
         file = fopen(filename, "wb"); assert(file);
@@ -385,8 +390,9 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
                                 bool collection, int pages, int copies, int bits, cups_mode_t mode,
                                 int damage)
 {
-    /* The P710BT's third page must stay above its 24.5 mm physical minimum. */
-    const unsigned lengths[] = {180, 360, is_p710bt() ? 200 : 90};
+    /* The P710BT's third page must stay above its 24.5 mm physical minimum and
+     * round-trip through the centimm media length at 180 dpi. */
+    const unsigned lengths[] = {180, 360, is_p710bt() ? 189 : 90};
     char path[] = "/tmp/ptouch-batch-raster-XXXXXX";
     int fd = mkstemp(path); assert(fd >= 0);
     cups_raster_t *raster = cupsRasterOpen(fd, mode); assert(raster);
@@ -1108,7 +1114,7 @@ int main(int argc, char **argv)
     }
     assert(papplJobGetState(first) == IPP_JSTATE_COMPLETED);
     assert(papplJobGetState(follower) == IPP_JSTATE_COMPLETED);
-    pthread_join(queued_sink, NULL); expect_wire(2, 360, 0, 2);
+    pthread_join(queued_sink, NULL); expect_wire(2, tx(180) * 2, 0, 2);
     const char *presets[] = {"ptouch-chain", "trim-after-pages", "none", "trim-after-job"};
     const pt_cut_mode modes[] = {PT_CUT_CHAIN, PT_CUT_EACH, PT_CUT_NONE, PT_CUT_END};
     check_capabilities(capture);
