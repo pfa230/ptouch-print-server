@@ -20,6 +20,8 @@ PT-P710BT can also be reached over Bluetooth instead of USB (`PTOUCH_BT_ADDRESS`
 
 - Prints 1:1 within the tape's imageable width, honoring submitted page geometry;
   PNG length follows its image when a concrete media length is omitted.
+- Counts the P710BT's 14-dot feed per end inside the requested page length rather
+  than adding it, and fails a page whose ink reaches a replaced end row.
 - Advertises **nominal** tape sizes with real margins (`om_24x100mm`), so clients
   match the tape they actually loaded.
 - Uses standard IPP **finishings** for cuts between labels and at batch end,
@@ -226,16 +228,23 @@ The finishing contract and canonical 32/52/76/120/128-dot tape windows are share
 by both implemented models. PT-2730 retains its legacy eight-byte print
 information and uncompressed rows. PT-P710BT uses `ESC i a` raster mode,
 automatic status notification, thirteen-byte `ESC i z` print information with
-the actual destination row count, a 14-dot feed margin, and TIFF PackBits rows.
-Its first page has indication 0 on a freshly initialized closed run; later
-pages and healthy cross-batch continuation use 1. Only a fresh P710BT run sends
-the 100-byte invalidation and initialization; continuation sends neither.
+the transmitted print-area row count, a 14-dot feed margin, and TIFF PackBits
+rows. The print-area count is the requested logical page height minus the 28
+dots of end feed; those blank boundary rows are verified and not transmitted, so
+the feed is counted once and ink in a replaced end row fails the job. Its first
+page has indication 0 on a freshly initialized closed run; later pages and
+healthy cross-batch continuation use 1. Only a fresh P710BT run sends the
+100-byte invalidation and initialization; continuation sends neither.
 Finalization still uses deferred FF or late chain-off/EJECT for both models.
 The P710BT integrated [hardware gate](tests/P710BT-ACCEPTANCE.md) passed all four
 finishing policies, held-run continuation, wrong-media rejection, offline queue
 recovery, and explicit uncertain-output recovery. It used 15 complete labels,
-including four operator-requested repeat labels. Direct geometry probes remain
-separate evidence; 6/24 mm have software coverage only.
+including four operator-requested repeat labels, and predates the end-feed length
+correction above. That correction passes the core, both model driver, and PNG
+geometry suites with pinned PAPPL 1.4.11 and CUPS 2.4.2-3+deb12u9. This is software
+verification only; physical behavior is left to the operator's separate
+validation. Direct geometry probes remain separate evidence; 6/24 mm have
+software coverage only.
 
 ## Configuration
 

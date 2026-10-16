@@ -114,14 +114,23 @@ def decode(data, model):
     return commands
 
 
-def check_geometry(commands, copies):
+def page_rows(model):
+    """Transmitted print-area rows for a 50 mm logical page on the model."""
+    return 354 - (2 * 14 if model == "PT-P710BT" else 0)
+
+
+def check_geometry(commands, copies, model):
+    """Reconstruct the physical page: feed ends plus transmitted print area."""
+    end = 14 if model == "PT-P710BT" else 0
+    height = page_rows(model)
     rows = [data[3:] for name, data in commands if name == "raster"]
-    assert len(rows) == 354 * copies
+    assert len(rows) == height * copies
     for page in range(copies):
-        for y in range(354):
+        for y in range(height):
             for x in range(128):
-                actual = bool(rows[page * 354 + y][15 - x // 8] & (1 << (x % 8)))
-                expected = 26 <= x < 102 and 87 <= y < 267 and (x in (26, 101) or y in (87, 266))
+                actual = bool(rows[page * height + y][15 - x // 8] & (1 << (x % 8)))
+                yy = y + end  # logical row, with the leading feed margin restored
+                expected = 26 <= x < 102 and 87 <= yy < 267 and (x in (26, 101) or yy in (87, 266))
                 assert actual == expected, (page, x, y, actual, expected)
 
 
@@ -258,11 +267,11 @@ def main():
             for label, finishing, autocuts, at_end, resets in cases:
                 print(submit(url, directory, image, finishing, copies=3))
                 commands = decode(sink.take(), args.model)
-                check_geometry(commands, 3)
+                check_geometry(commands, 3, args.model)
                 result = summary(commands)
                 pages = result["pages"]
                 assert len(pages) == 3, result
-                assert [p["rows"] for p in pages] == [354] * 3, result
+                assert [p["rows"] for p in pages] == [page_rows(args.model)] * 3, result
                 assert [p["autocut"] for p in pages] == autocuts, result
                 assert [p["chain_off_at_print"] for p in pages] == [False, False, at_end], result
                 assert [p["finish"] for p in pages] == ["ff", "ff", "eject" if at_end else "ff"], result
@@ -282,9 +291,9 @@ def main():
   EXPECT finishings-col-default OF-TYPE {out_type}''')))
                 print(submit(url, directory, image, copies=2))
                 commands = decode(sink.take(), args.model)
-                check_geometry(commands, 2)
+                check_geometry(commands, 2, args.model)
                 result = summary(commands)
-                assert [p["rows"] for p in result["pages"]] == [354, 354], result
+                assert [p["rows"] for p in result["pages"]] == [page_rows(args.model)] * 2, result
                 assert [p["autocut"] for p in result["pages"]] == [True, False], result
                 assert [p["chain_off_at_print"] for p in result["pages"]] == [False, at_end], result
                 assert [p["finish"] for p in result["pages"]] == ["ff", "eject" if at_end else "ff"], result
@@ -317,7 +326,7 @@ def main():
                 assert row and reason in row.group(0), row
             print(submit(url, directory, image, "ATTR enum finishings 60"))
             commands = decode(sink.take(), args.model)
-            check_geometry(commands, 1)
+            check_geometry(commands, 1, args.model)
             result = summary(commands)
             assert result["init"] == 0 and result["eject"] == 1, result
             assert len(result["pages"]) == 1 and not result["terminal_commands_after_pages"], result

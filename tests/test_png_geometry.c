@@ -63,9 +63,9 @@ static void *server(void *s) { papplSystemRun(s); return NULL; }
 static http_t *http;
 static int port;
 static const char resource[] = "/ipp/print/png";
-static void operation(ipp_t *request)
+static void operation(ipp_t *request, const char *res)
 {
-    char uri[128]; snprintf(uri, sizeof uri, "ipp://localhost:%d%s", port, resource);
+    char uri[128]; snprintf(uri, sizeof uri, "ipp://localhost:%d%s", port, res);
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "test");
 }
@@ -186,7 +186,8 @@ static void write_png(const char *path, int width, int height, int xppi, int ypp
 /* media 0 omitted, 1 named50mm, 2 dimensions50mm, 3 source-only, 4 margin-only,
  * 5 explicit10mm, 6 wrong tape18mm, 7 collection named50mm,
  * 8 collection named25mm (too short), 9 collection named18mm (wrong tape),
- * 10/11 custom12x40mm quantized by -/+1 centimm with explicit297 margins. */
+ * 10/11 custom12x40mm quantized by -/+1 centimm with explicit297 margins,
+ * 12 explicit 36 mm dimensions. */
 static void run_image(pappl_printer_t *printer, int width, int height, int xppi, int yppi,
                       const unsigned char *pixels, int orientation, int media, int copies,
                       const char *scaling, bool success, unsigned expected_rows)
@@ -199,7 +200,8 @@ static void run_image(pappl_printer_t *printer, int width, int height, int xppi,
         FILE *f = fopen(path, "rb"); assert(f); assert(!fseek(f, 0, SEEK_END));
         long size = ftell(f); fclose(f); assert(size > 12 && !truncate(path, size - 12));
     }
-    ipp_t *request = ippNewRequest(IPP_OP_CREATE_JOB); operation(request);
+    char res[128]; snprintf(res, sizeof res, "/ipp/print/%s", papplPrinterGetName(printer));
+    ipp_t *request = ippNewRequest(IPP_OP_CREATE_JOB); operation(request, res);
     ippAddString(request, IPP_TAG_JOB, IPP_TAG_KEYWORD, "job-hold-until", NULL, "indefinite");
     ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", copies);
     ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_ENUM, "finishings", IPP_FINISHINGS_NONE);
@@ -216,26 +218,26 @@ static void run_image(pappl_printer_t *printer, int width, int height, int xppi,
         else {
             ipp_t *size = ippNew();
             ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "x-dimension", media == 6 ? 1800 : media == 10 ? 1199 : media == 11 ? 1201 : 1200);
-            ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "y-dimension", media == 5 ? 1000 : media >= 10 ? 3986 : 5000);
+            ippAddInteger(size, IPP_TAG_ZERO, IPP_TAG_INTEGER, "y-dimension", media == 5 ? 1000 : media == 12 ? 3600 : media >= 10 ? 3986 : 5000);
             ippAddCollection(col, IPP_TAG_ZERO, "media-size", size); ippDelete(size);
-            if (media >= 10) {
+            if (media == 10 || media == 11) {
                 ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-left-margin", 297);
                 ippAddInteger(col, IPP_TAG_ZERO, IPP_TAG_INTEGER, "media-right-margin", 297);
             }
         }
         ippAddCollection(request, IPP_TAG_JOB, "media-col", col); ippDelete(col);
     }
-    ipp_t *response = cupsDoRequest(http, request, resource);
+    ipp_t *response = cupsDoRequest(http, request, res);
     if (!response || ippGetStatusCode(response) > IPP_STATUS_OK_EVENTS_COMPLETE)
         fprintf(stderr, "create geometry job: %s\n", cupsLastErrorString());
     assert(response && ippGetStatusCode(response) <= IPP_STATUS_OK_EVENTS_COMPLETE);
     int id = ippGetInteger(ippFindAttribute(response, "job-id", IPP_TAG_INTEGER), 0); ippDelete(response);
     pappl_job_t *j = papplPrinterFindJob(printer, id); assert(j); last_job = j;
-    request = ippNewRequest(IPP_OP_SEND_DOCUMENT); operation(request);
+    request = ippNewRequest(IPP_OP_SEND_DOCUMENT); operation(request, res);
     ippAddInteger(request, IPP_TAG_OPERATION, IPP_TAG_INTEGER, "job-id", id);
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, pixels ? "image/png" : "image/jpeg");
     ippAddBoolean(request, IPP_TAG_OPERATION, "last-document", true);
-    response = cupsDoFileRequest(http, request, resource, path); unlink(path);
+    response = cupsDoFileRequest(http, request, res, path); unlink(path);
     assert(response && ippGetStatusCode(response) <= IPP_STATUS_OK_EVENTS_COMPLETE); ippDelete(response);
     used = written_rows = 0; assert(papplJobRelease(j, "test"));
     for (int i = 0; i < 1000 && papplJobGetState(j) < IPP_JSTATE_CANCELED; i++) {
@@ -254,6 +256,7 @@ static void run_image(pappl_printer_t *printer, int width, int height, int xppi,
 static void run_model(const char *model, int index)
 {
     selected_model = model; packbits = !strcmp(model, "PT-P710BT");
+    int end = packbits ? PT_END_MARGIN_PX : 0;  /* feed dots replaced at each end */
     assert(!setenv("PTOUCH_MODEL", model, 1));
     used = fail_row = written_rows = 0;
     pappl_pr_driver_t drv = {"ptouch", "Test", NULL, NULL};
@@ -269,7 +272,7 @@ static void run_model(const char *model, int index)
     assert(papplSystemAddListeners(sys, "localhost"));
     pthread_t thread; assert(!pthread_create(&thread, NULL, server, sys));
     http = httpConnect2("localhost", port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL); assert(http);
-    ipp_t *query = ippNewRequest(IPP_OP_GET_PRINTER_ATTRIBUTES); operation(query);
+    ipp_t *query = ippNewRequest(IPP_OP_GET_PRINTER_ATTRIBUTES); operation(query, resource);
     ipp_t *reply = cupsDoRequest(http, query, resource); assert(reply);
     ipp_attribute_t *formats = ippFindAttribute(reply, "document-format-supported", IPP_TAG_MIMETYPE);
     assert(formats); int png_count = 0;
@@ -279,34 +282,48 @@ static void run_model(const char *model, int index)
         assert(strcmp(format, "image/vnd.ptouch-raster"));
     }
     assert(png_count == 1); ippDelete(reply);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 1, 1, "none", true, 354);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 2, 1, "none", true, 354);
-    run_image(p, 76, 180, 180, 180, NULL, 3, 0, 1, "none", true, 708);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 1, 1, "none", true, 354 - 2 * end);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 2, 1, "none", true, 354 - 2 * end);
+    run_image(p, 76, 180, 180, 180, NULL, 3, 0, 1, "none", true, 708 - 2 * end);
     unsigned char *pixels = malloc(3000 * 300); assert(pixels);
     memset(pixels, 255, 3000 * 300);
-    pixels[5 * 76 + 2] = pixels[17 * 76 + 70] = 0;
-    for (int m = 0; m <= 4; m++) run_image(p, 76, 180, 180, 180, pixels, 3, m, 1, "none", true, m == 1 || m == 2 ? 354 : 180);
-    run_image(p, 76, 180, 180, 180, pixels, 3, 7, 1, "none", true, 354);
+    /* Markers sit inside the model's imageable along-tape window. */
+    pixels[(end + 5) * 76 + 2] = pixels[(end + 17) * 76 + 70] = 0;
+    for (int m = 0; m <= 4; m++)
+        run_image(p, 76, 180, 180, 180, pixels, 3, m, 1, "none", true,
+                  (m == 1 || m == 2 ? 354 : 180) - 2 * end);
+    run_image(p, 76, 180, 180, 180, pixels, 3, 7, 1, "none", true, 354 - 2 * end);
     run_image(p, 76, 180, 180, 180, pixels, 3, 8, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 180, pixels, 3, 9, 1, "none", false, 0);
-    run_image(p, 42, 180, 180, 180, pixels, 3, 10, 1, "none", true, 282);
-    run_image(p, 42, 180, 180, 180, pixels, 3, 11, 1, "none", true, 282);
+    run_image(p, 42, 180, 180, 180, pixels, 3, 10, 1, "none", true, 282 - 2 * end);
+    run_image(p, 42, 180, 180, 180, pixels, 3, 11, 1, "none", true, 282 - 2 * end);
     run_image(p, 76, 180, 180, 180, pixels, 3, 10, 1, "none", false, 0);
     assert(strstr(papplJobGetMessage(last_job), "printable width is 42"));
-    run_image(p, 76, 180, 0, 0, pixels, 3, 0, 3, "none", true, 540);
+    run_image(p, 76, 180, 0, 0, pixels, 3, 0, 3, "none", true, 3 * (180 - 2 * end));
     run_image(p, 76, 180, 180, 180, pixels, 3, 5, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 180, pixels, 3, 6, 1, "none", false, 0);
     run_image(p, 76, 180, 180, 360, pixels, 3, 0, 1, "none", false, 0);
     memset(pixels, 255, 3000 * 300); pixels[0] = pixels[200 * 299 + 199] = 0;
     run_image(p, 200, 300, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     memset(pixels, 0, 200 * 300);
+    /* A separate queue isolates the P710BT "fill" rejection: PAPPL fills the
+     * whole page, including the feed ends the driver refuses, so the resulting
+     * uncertain latch must not block the jobs below. */
+    pappl_printer_t *q = NULL;
+    if (end) { q = papplPrinterCreate(sys, 0, "pngfill", "ptouch", id, "pngfixture://capture"); assert(q); }
     const char *scales[] = {"fit", "auto-fit", "auto", "fill"};
     static unsigned char scaled[7000][128];
     for (int c = 0; c < 4; c++) {
-        run_image(p, 200, 300, 180, 180, pixels, 3, 2, 1, scales[c], true, 354);
-        unsigned finished; assert(rows(scaled, &finished) == 354);
-        for (unsigned y = 0; y < 354; y++) for (unsigned x = 0; x < 128; x++) {
-            bool black = x >= 26 && x < 102 && (c == 3 || (y >= 120 && y < 234));
+        bool fill = c == 3;
+        if (fill && end) {
+            run_image(q, 200, 300, 180, 180, pixels, 3, 2, 1, "fill", false, 0);
+            continue;
+        }
+        unsigned txrows = 354 - 2 * end;
+        run_image(p, 200, 300, 180, 180, pixels, 3, 2, 1, scales[c], true, txrows);
+        unsigned finished; assert(rows(scaled, &finished) == txrows);
+        for (unsigned y = 0; y < txrows; y++) for (unsigned x = 0; x < 128; x++) {
+            bool black = x >= 26 && x < 102 && (fill || (y + end >= 120 && y + end < 234));
             assert(scaled[y][x] == black);
         }
     }
@@ -316,56 +333,63 @@ static void run_model(const char *model, int index)
     for (int c = 0; c < 5; c++) {
         int o = orientations[c], w = c >= 2 ? 180 : 76, h = c >= 2 ? 76 : 180;
         memset(pixels, 255, w * h);
-        int mx[] = {2, w - 3, 11}, my[] = {5, h - 7, 19};
+        /* Along-tape marker coordinates stay inside the model's imageable ends. */
+        int mx[] = {c >= 2 ? end + 6 : 2, c >= 2 ? w - end - 7 : w - 3, c >= 2 ? end + 19 : 11};
+        int my[] = {c >= 2 ? 2 : end + 6, c >= 2 ? h - 3 : h - end - 7, c >= 2 ? 11 : end + 19};
         for (int i = 0; i < 3; i++) pixels[my[i] * w + mx[i]] = 0;
-        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, 180);
-        unsigned finishes; assert(rows(actual, &finishes) == 180);
-        unsigned char expected[180][128] = {{0}};
+        unsigned txrows = 180 - 2 * end;
+        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, txrows);
+        unsigned finishes; assert(rows(actual, &finishes) == txrows);
+        static unsigned char expected[180][128];
+        memset(expected, 0, sizeof expected);
         for (int i = 0; i < 3; i++) {
-            int x, y;
-            if (o == 3) { x = mx[i]; y = my[i]; }
-            else if (o == 6) { x = w - 1 - mx[i]; y = h - 1 - my[i]; }
-            else if (o == 4) { x = my[i]; y = w - 1 - mx[i]; }
-            else { x = h - 1 - my[i]; y = mx[i]; }
-            expected[y][26 + x] = 1;
+            int x, ly;
+            if (o == 3) { x = mx[i]; ly = my[i]; }
+            else if (o == 6) { x = w - 1 - mx[i]; ly = h - 1 - my[i]; }
+            else if (o == 4) { x = my[i]; ly = w - 1 - mx[i]; }
+            else { x = h - 1 - my[i]; ly = mx[i]; }
+            expected[ly - end][26 + x] = 1;
         }
-        if (memcmp(actual, expected, sizeof expected))
-            for (unsigned y = 0; y < 180; y++) for (unsigned x = 0; x < 128; x++)
+        if (memcmp(actual, expected, (size_t)txrows * 128))
+            for (unsigned y = 0; y < txrows; y++) for (unsigned x = 0; x < 128; x++)
                 if (actual[y][x] != expected[y][x]) fprintf(stderr, "orientation%d dot%u,%u actual%d expected%d\n", o, x, y, actual[y][x], expected[y][x]);
-        assert(!memcmp(actual, expected, sizeof expected));
+        assert(!memcmp(actual, expected, (size_t)txrows * 128));
     }
     unsigned finishes;
     pt_geometry g; assert(pt_tape_geometry(12, &g));
     for (int c = 0; c < 4; c++) {
         int o = orientations[c], w = c < 2 ? g.nominal_px : 180, h = c < 2 ? 180 : g.nominal_px;
         int first = o == 6 || o == 5 ? g.nominal_px - g.right_px : g.left_px;
+        int a_lo = end + 5, a_hi = 180 - end - 9;
         memset(pixels, 255, w * h);
-        int mx[] = {c < 2 ? first : 5, c < 2 ? first + g.imageable_px - 1 : 171};
-        int my[] = {c < 2 ? 5 : first, c < 2 ? 171 : first + g.imageable_px - 1};
+        int mx[] = {c < 2 ? first : a_lo, c < 2 ? first + g.imageable_px - 1 : a_hi};
+        int my[] = {c < 2 ? a_lo : first, c < 2 ? a_hi : first + g.imageable_px - 1};
         for (int i = 0; i < 2; i++) pixels[my[i] * w + mx[i]] = 0;
-        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, 180);
-        rows(actual, &finishes);
-        unsigned char expected[180][128] = {{0}};
+        unsigned txrows = 180 - 2 * end;
+        run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", true, txrows);
+        assert(rows(actual, &finishes) == txrows);
+        static unsigned char expected[180][128];
+        memset(expected, 0, sizeof expected);
         for (int i = 0; i < 2; i++) {
-            int x, y;
-            if (o == 3) { x = mx[i] - first; y = my[i]; }
-            else if (o == 6) { x = g.imageable_px - 1 - (mx[i] - first); y = h - 1 - my[i]; }
-            else if (o == 4) { x = my[i] - first; y = w - 1 - mx[i]; }
-            else { x = g.imageable_px - 1 - (my[i] - first); y = mx[i]; }
-            expected[y][26 + x] = 1;
+            int x, ly;
+            if (o == 3) { x = mx[i] - first; ly = my[i]; }
+            else if (o == 6) { x = g.imageable_px - 1 - (mx[i] - first); ly = h - 1 - my[i]; }
+            else if (o == 4) { x = my[i] - first; ly = w - 1 - mx[i]; }
+            else { x = g.imageable_px - 1 - (my[i] - first); ly = mx[i]; }
+            expected[ly - end][26 + x] = 1;
         }
-        assert(!memcmp(actual, expected, sizeof expected));
+        assert(!memcmp(actual, expected, (size_t)txrows * 128));
         pixels[0] = 0;
         run_image(p, w, h, 180, 180, pixels, o, 0, 1, "none", false, 0);
     }
     memset(pixels, 255, 152 * 360);
     for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++)
-        pixels[(10 + dy) * 152 + 4 + dx] = 0;
-    run_image(p, 152, 360, 360, 360, pixels, 3, 0, 1, "none", true, 180);
+        pixels[(2 * end + 10 + dy) * 152 + 4 + dx] = 0;
+    run_image(p, 152, 360, 360, 360, pixels, 3, 0, 1, "none", true, 180 - 2 * end);
     rows(actual, &finishes); assert(actual[5][28]);
     memset(pixels, 255, 3000 * 300);
-    run_image(p, 76, 1, 180, 180, pixels, 3, 0, 1, "none", true, 35);
-    run_image(p, 76, 2125, 180, 180, pixels, 3, 0, 1, "none", true, 2125);
+    run_image(p, 76, 1, 180, 180, pixels, 3, 0, 1, "none", true, 35 - 2 * end);
+    run_image(p, 76, 2125, 180, 180, pixels, 3, 0, 1, "none", true, 2125 - 2 * end);
     run_image(p, 76, 2126, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     /* Decoded full-width outlines exercise the common window on all five tapes. */
     pappl_pr_driver_data_t ready; papplPrinterGetDriverData(p, &ready);
@@ -380,17 +404,32 @@ static void run_model(const char *model, int index)
         snprintf(media.size_name, sizeof media.size_name, "custom_%dx100mm_%dx100mm", tapes[i], tapes[i]);
         assert(papplPrinterSetReadyMedia(p, 1, &media));
         int width = geometry.imageable_px;
+        unsigned txrows = 180 - 2 * end;
         memset(pixels, 255, width * 180);
         for (int y = 0; y < 180; y++) for (int x = 0; x < width; x++)
-            if (!y || y == 179 || !x || x == width - 1) pixels[y * width + x] = 0;
-        run_image(p, width, 180, 180, 180, pixels, 3, 0, 1, "none", true, 180);
-        assert(rows(actual, &finishes) == 180);
+            if (y == end || y == 179 - end ||
+                ((!x || x == width - 1) && y >= end && y < 180 - end))
+                pixels[y * width + x] = 0;
+        run_image(p, width, 180, 180, 180, pixels, 3, 0, 1, "none", true, txrows);
+        assert(rows(actual, &finishes) == txrows);
         int start = (128 - width) / 2;
-        for (int y = 0; y < 180; y++) for (int x = 0; x < 128; x++)
+        for (unsigned y = 0; y < txrows; y++) for (int x = 0; x < 128; x++)
             assert(actual[y][x] == (x >= start && x < start + width &&
-                (!y || y == 179 || x == start || x == start + width - 1)));
+                (!y || y == txrows - 1 || x == start || x == start + width - 1)));
     }
     assert(papplPrinterSetReadyMedia(p, 1, &original_media));
+    /* Reported 36 mm case: explicit and image-derived length both reconstruct
+     * 255 logical rows as 227 transmitted rows plus 28 feed dots. */
+    for (int derived = 0; derived < 2; derived++) {
+        memset(pixels, 255, 76 * 255);
+        pixels[(end + 20) * 76 + 40] = 0;
+        run_image(p, 76, 255, 180, 180, pixels, 3, derived ? 12 : 0, 1, "none", true, 255 - 2 * end);
+        assert(rows(actual, &finishes) == 255 - 2 * end);
+        bool ink = false, before = false;
+        for (int x = 0; x < 128; x++) { ink |= actual[20][x]; before |= actual[19][x]; }
+        assert(ink && !before);
+    }
+    memset(pixels, 255, 3000 * 300);
     truncate_png = true;
     run_image(p, 76, 180, 180, 180, pixels, 3, 0, 1, "none", false, 0);
     assert(papplJobGetMessage(last_job) && strstr(papplJobGetMessage(last_job), "PNG decode failed"));

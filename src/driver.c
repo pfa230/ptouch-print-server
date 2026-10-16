@@ -495,13 +495,16 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
          !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
          (p710bt && !pt_job_write(j, d, buf, pt_cmd_auto_status(buf, true)))))
         return pt_fail_job(j);
+    /* The logical page stays whole; only the transmitted print area shrinks by
+     * the feed the hardware replaces at each end, so the feed is counted once. */
     size_t info_len = p710bt ? pt_cmd_printinfo_extended(buf, b->tape_mm,
-                             o->header.cupsHeight, b->first_label && !continuation ? 0 : 1) :
+                             o->header.cupsHeight - 2u * PT_END_MARGIN_PX,
+                             b->first_label && !continuation ? 0 : 1) :
                              pt_cmd_printinfo(buf, b->tape_mm);
     if (!pt_job_write(j, d, buf, info_len) ||
         !pt_job_write(j, d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
         !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)) ||
-        (p710bt && (!pt_job_write(j, d, buf, pt_cmd_margin(buf, 14)) ||
+        (p710bt && (!pt_job_write(j, d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
                    !pt_job_write(j, d, buf, pt_cmd_compression(buf, 2)))))
         return pt_fail_job(j);
     b->first_label = false;
@@ -509,10 +512,11 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     return true;
 }
 
-/* One delivered scanline is one cross-tape Brother raster line (M0 Probe B). */
+/* One delivered scanline is one cross-tape Brother raster line (M0 Probe B).
+ * On a P710BT the first and last 14 logical rows are replaced by hardware feed:
+ * those rows are verified blank and not transmitted, every other row is. */
 static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned y, const unsigned char *l)
 {
-    (void)y;
     pt_batch *batch = papplJobGetData(j);
     if (!batch || batch->failed || !batch->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
     pt_geometry g;
@@ -522,6 +526,15 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     uint8_t packed[16], buf[24];
     pt_pack_window(packed, l, g.left_px, g.imageable_px);
     const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
+    if (model->pid == 0x20af &&
+        (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= o->header.cupsHeight)) {
+        for (unsigned i = 0; i < sizeof packed; i++)
+            if (packed[i]) {
+                papplJobSetMessage(j, "Raster ink in a physical end margin that hardware feed replaces");
+                return pt_fail_job(j);
+            }
+        return true;
+    }
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
                     pt_cmd_sendraster_packbits(buf, packed, sizeof packed) :
                     pt_cmd_sendraster(buf, packed, sizeof packed);

@@ -7,6 +7,11 @@
 #define PT_ROLL_MIN_CENTIMM 500     /* 5 mm   */
 #define PT_ROLL_MAX_CENTIMM 30000   /* 300 mm */
 
+/* PT-P710BT reserves 14 dots of feed at each page end. The driver counts that
+ * feed inside the requested page length: it declares and transmits N minus 28
+ * rows and omits the replaced blank end rows instead of adding 28 dots. */
+#define PT_END_MARGIN_PX 14
+
 /* Confirm clean live tape before geometry is constructed, using a bounded
  * status query on the job-owned printer connection. Socket test transports retain
  * configured media. Uncertain output blocks every transport until recovery. */
