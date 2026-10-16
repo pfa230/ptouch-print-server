@@ -100,9 +100,19 @@ write_files:
         addr=$(bluetoothctl devices | awk '/PT-P710BT/ {print $2; exit}')
         [ -n "$addr" ] || { echo "No PT-P710BT found; is it on and in range?" >&2; exit 1; }
       fi
-      if ! bluetoothctl info "$addr" | grep -q 'Paired: yes'; then
+      if ! bluetoothctl info "$addr" | grep -q 'Bonded: yes'; then
+        # BlueZ pairs only a device it has seen in a scan.
+        if ! bluetoothctl info "$addr" >/dev/null 2>&1; then
+          echo "Scanning 20 s for $addr..."
+          bluetoothctl --timeout 20 scan on >/dev/null
+        fi
+        # Without pairable the Pi pairs but does not bond, and re-pairs on every connection.
+        bluetoothctl pairable on >/dev/null
         bluetoothctl --agent NoInputNoOutput pair "$addr" ||
-          { echo "Pairing failed; pair interactively with bluetoothctl" >&2; exit 1; }
+          { bluetoothctl pairable off >/dev/null; echo "Pairing failed; pair interactively with bluetoothctl" >&2; exit 1; }
+        bluetoothctl pairable off >/dev/null
+        bluetoothctl info "$addr" | grep -q 'Bonded: yes' ||
+          { echo "Paired but not bonded; pair interactively with bluetoothctl" >&2; exit 1; }
       fi
       bluetoothctl trust "$addr"
       sed -i "s|^PTOUCH_BT_ADDRESS=.*|PTOUCH_BT_ADDRESS=$addr|" /data/ptouch/ptouch.env
