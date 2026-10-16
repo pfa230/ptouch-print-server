@@ -21,6 +21,7 @@ None.
 
 ### Modified Capabilities
 
+- `batch-printing`: Mandatory precut separates the remaining blank tail after explicit release.
 - `printer-device`: Model-scoped direct cut operation, blank continuation, device access, evidence, and Bluetooth/idle-poll behavior.
 - `server-architecture`: An IPP action outside job submission and a distinction between held user content and the remaining blank continuation.
 
