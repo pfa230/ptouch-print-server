@@ -9,7 +9,7 @@ This guide runs the server on a wall-powered Raspberry Pi Zero 2 W and reaches a
 
 ## Prebuilt SD card
 
-`deploy/pi/` builds a card that does everything below unattended and survives power loss. Use it instead of the manual steps.
+`deploy/pi/` builds a card that does everything below unattended, with a read-only root, built to tolerate power loss. Reboots are tested; pulling power is not. Use it instead of the manual steps.
 
 What the card does:
 
@@ -109,4 +109,4 @@ The queue is reachable at `ipp://<pi-hostname>.local:8000/ipp/print/ptouch`.
 
 ## Roll back
 
-Stop the Pi container (`sudo docker rm -f ptouch`), re-enable Avahi if the Pi needs it (`sudo systemctl enable --now avahi-daemon`), and return to the USB deployment.
+Stop the Pi server: `sudo docker rm -f ptouch` for a manual install, or `sudo systemctl stop ptouch` on a prebuilt card, whose service otherwise recreates the container (to keep it off across reboots, disable it through `/media/root-ro` as above). Re-enable Avahi if the Pi needs it (`sudo systemctl enable --now avahi-daemon`), and return to the USB deployment.
