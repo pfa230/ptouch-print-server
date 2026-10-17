@@ -20,10 +20,12 @@ RUN /tmp/build-cups.sh /tmp/cups-raster.patch
 COPY patches/pappl-1.4.11-raster.patch /tmp/pappl-raster.patch
 COPY patches/pappl-1.4.11-finishings.patch /tmp/pappl-finishings.patch
 COPY patches/pappl-1.4.11-job-history.patch /tmp/pappl-job-history.patch
+COPY patches/pappl-1.4.11-printer-operations.patch /tmp/pappl-printer-operations.patch
 RUN git clone --depth 1 --branch v1.4.11 https://github.com/michaelrsweet/pappl /tmp/pappl \
  && cd /tmp/pappl && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-raster.patch \
  && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-finishings.patch \
  && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-job-history.patch \
+ && patch --batch --forward --fuzz=0 -p1 < /tmp/pappl-printer-operations.patch \
  && ./configure && make && make install && ldconfig \
  && rm -rf /tmp/pappl
 

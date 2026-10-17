@@ -109,3 +109,18 @@ size_t pt_cmd_sendraster_packbits(uint8_t *o, const uint8_t *data, size_t len)
     memcpy(o + 4, data, len);
     return len + 4;
 }
+
+size_t pt_cmd_blank_continuation(uint8_t *o, uint8_t mm)
+{
+    static const uint8_t white[16];
+    size_t n = pt_cmd_rasterstart(o, FLAG_P700_INIT);
+    n += pt_cmd_auto_status(o + n, true);
+    n += pt_cmd_printinfo_extended(o + n, mm, 1, 1);
+    n += pt_cmd_setmode(o + n, 0x40);
+    n += pt_cmd_setadvanced(o + n, 0);
+    n += pt_cmd_margin(o + n, 14);
+    n += pt_cmd_compression(o + n, 2);
+    n += pt_cmd_sendraster_packbits(o + n, white, sizeof white);
+    n += pt_cmd_ff(o + n);
+    return n;
+}

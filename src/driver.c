@@ -234,8 +234,9 @@ static void pt_finishing_attrs(ipp_t *attrs)
 static bool media_col_for(int tape_mm, int length_centimm, int dpi, pappl_media_col_t *out);
 
 /* The queue owns its state; PAPPL serializes jobs, while status may run on
- * another thread. Never call PAPPL APIs with this mutex held. */
-typedef enum { PT_RUN_CLOSED, PT_RUN_OPEN, PT_RUN_UNCERTAIN } pt_run;
+ * another thread. Never call PAPPL APIs with this mutex held. OPEN holds user
+ * content; OPEN_BLANK holds only the blank continuation after Ptouch-Cut. */
+typedef enum { PT_RUN_CLOSED, PT_RUN_OPEN, PT_RUN_OPEN_BLANK, PT_RUN_UNCERTAIN } pt_run;
 typedef struct {
     pthread_mutex_t lock;
     const pt_dev *model;
@@ -272,9 +273,11 @@ static void pt_run_set(pappl_printer_t *printer, pt_run run)
     pthread_mutex_unlock(&state->lock);
 }
 
+/* Both healthy open runs continue without initialization. */
 static bool pt_chain_get(pappl_printer_t *printer)
 {
-    return pt_run_get(printer) == PT_RUN_OPEN;
+    pt_run run = pt_run_get(printer);
+    return run == PT_RUN_OPEN || run == PT_RUN_OPEN_BLANK;
 }
 
 /* Cassette/offline observations may invalidate a healthy run, but cannot prove
@@ -546,39 +549,50 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
 #define PT_PRINT_READY_TIMEOUT_MS 20000
 static long pt_ms_since(const struct timespec *t0);
 
-static bool pt_wait_ready(pappl_job_t *j, pappl_device_t *d)
+/* A job's cancellation also ends the wait, leaving `message` empty. */
+static bool pt_await_ready(pappl_printer_t *printer, pappl_job_t *j, pappl_device_t *d,
+                           char *message, size_t size)
 {
-    const char *uri = papplPrinterGetDeviceURI(papplJobGetPrinter(j));
+    const char *uri = papplPrinterGetDeviceURI(printer);
+    *message = '\0';
     if (!pt_live_uri(uri)) return true;
     uint8_t packet[32];
     size_t used = 0;
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     while (pt_ms_since(&start) < PT_PRINT_READY_TIMEOUT_MS) {
-        if (papplJobIsCanceled(j)) return false;
+        if (j && papplJobIsCanceled(j)) return false;
         ssize_t n = pt_read_status(d, uri, packet + used, sizeof packet - used);
         if (n < 0) {
-            papplJobSetMessage(j, "printer status read failed after printing");
+            snprintf(message, size, "printer status read failed after printing");
             return false;
         }
         used += (size_t)n;
         if (used < sizeof packet) continue;
         pt_status status;
         if (pt_parse_status(packet, &status)) {
-            papplJobSetMessage(j, "printer reported invalid status after printing");
+            snprintf(message, size, "printer reported invalid status after printing");
             return false;
         }
-        papplLogJob(j, PAPPL_LOGLEVEL_DEBUG, "print status error=0x%04x type=0x%02x phase=0x%02x",
-                    status.error, packet[18], packet[19]);
+        papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "print status error=0x%04x type=0x%02x phase=0x%02x",
+                        status.error, packet[18], packet[19]);
         if (status.error) {
-            papplJobSetMessage(j, "printer reported error 0x%04x after printing", status.error);
+            snprintf(message, size, "printer reported error 0x%04x after printing", status.error);
             return false;
         }
         if (packet[18] == 6 && packet[19] == 0 && packet[20] == 0 && packet[21] == 0)
             return true;
         used = 0;
     }
-    papplJobSetMessage(j, "printer did not become ready after printing");
+    snprintf(message, size, "printer did not become ready after printing");
+    return false;
+}
+
+static bool pt_wait_ready(pappl_job_t *j, pappl_device_t *d)
+{
+    char message[64];
+    if (pt_await_ready(papplJobGetPrinter(j), j, d, message, sizeof message)) return true;
+    if (*message) papplJobSetMessage(j, "%s", message);
     return false;
 }
 
@@ -814,6 +828,92 @@ bool pt_refresh_ready_media(pappl_job_t *job, pappl_device_t *device)
     return false;
 }
 
+/* Runs while owning the device. Only a run holding user content sends output,
+ * after confirming the live tape; the run is uncertain until the blank
+ * continuation's own page reports receive-ready. */
+static ipp_status_t pt_cut(pappl_printer_t *printer, pappl_device_t *device, char *message, size_t size)
+{
+    const char *uri = papplPrinterGetDeviceURI(printer);
+    if (pt_run_get(printer) == PT_RUN_OPEN && pt_live_uri(uri) &&
+        !pt_publish_tape(printer, pt_read_live_tape(device, uri))) {
+        snprintf(message, size, "Live tape status is not clean, readable, and supported");
+        return IPP_STATUS_ERROR_DEVICE;
+    }
+    /* Confirmation invalidates a held run whose cassette changed. */
+    pt_run run = pt_run_get(printer);
+    if (pt_recovery_required(printer)) {
+        snprintf(message, size, "Output uncertain: power-cycle printer, then restart server");
+        return IPP_STATUS_ERROR_DEVICE;
+    }
+    if (run != PT_RUN_OPEN) return IPP_STATUS_OK;
+    pappl_pr_driver_data_t data;
+    papplPrinterGetDriverData(printer, &data);
+    uint8_t blank[64];
+    size_t n = pt_cmd_blank_continuation(blank, (uint8_t)(data.media_ready[0].size_width / 100));
+    pt_run_set(printer, PT_RUN_UNCERTAIN);
+    char reason[64];
+    if (!pt_dev_write(device, blank, n)) {
+        snprintf(message, size, "Write to printer failed; output uncertain: power-cycle printer, then restart server");
+        return IPP_STATUS_ERROR_DEVICE;
+    }
+    if (!pt_await_ready(printer, NULL, device, reason, sizeof reason)) {
+        snprintf(message, size, "%s; output uncertain: power-cycle printer, then restart server", reason);
+        return IPP_STATUS_ERROR_DEVICE;
+    }
+    pt_run_set(printer, PT_RUN_OPEN_BLANK);
+    return IPP_STATUS_OK;
+}
+
+/* Standard addressing only; document data and job attributes are rejected. */
+static bool pt_cut_attribute_allowed(ipp_attribute_t *attr)
+{
+    static const char *const names[] = {
+        "attributes-charset", "attributes-natural-language", "printer-uri",
+        "requesting-user-name", "requesting-user-uri",
+    };
+    const char *name = ippGetName(attr);
+    if (!name || ippGetGroupTag(attr) != IPP_TAG_OPERATION) return false;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(name, names[i])) return true;
+    return false;
+}
+
+bool pt_cut_op_cb(pappl_client_t *client, void *data)
+{
+    (void)data;
+    pappl_printer_t *printer = papplClientGetPrinter(client);
+    pt_printer_state *state = printer ? pt_state(printer) : NULL;
+    if (papplClientGetOperation(client) != PT_OP_CUT || !state || state->model->pid != 0x20af)
+        return false;
+    ipp_t *request = papplClientGetRequest(client);
+    for (ipp_attribute_t *attr = ippFirstAttribute(request); attr; attr = ippNextAttribute(request))
+        if (!pt_cut_attribute_allowed(attr)) papplClientRespondIPPUnsupported(client, attr);
+    if (ippGetStatusCode(papplClientGetResponse(client)) != IPP_STATUS_OK) return true;
+    http_t *http = papplClientGetHTTP(client);
+    char byte;
+    if (httpGetState(http) == HTTP_STATE_POST_RECV && httpPeek(http, &byte, 1) > 0) {
+        papplClientRespondIPP(client, IPP_STATUS_ERROR_BAD_REQUEST, "Ptouch-Cut does not accept document data.");
+        return true;
+    }
+    /* Print-Job/Create-Job policy; on denial PAPPL has sent the HTTP error. */
+    if (!papplPrinterIsAuthorized(client)) return true;
+    pappl_device_t *device = papplPrinterOpenDevice(printer);
+    if (!device) {
+        papplClientRespondIPP(client, IPP_STATUS_ERROR_BUSY, "Printer is busy or unavailable; try again later.");
+        return true;
+    }
+    char message[160] = "";
+    ipp_status_t status = pt_cut(printer, device, message, sizeof message);
+    papplPrinterCloseDevice(printer);
+    if (status == IPP_STATUS_OK) {
+        papplClientRespondIPP(client, status, NULL);
+    } else {
+        papplLogPrinter(printer, PAPPL_LOGLEVEL_ERROR, "Ptouch-Cut: %s", message);
+        papplClientRespondIPP(client, status, "%s", message);
+    }
+    return true;
+}
+
 bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *device_uri,
                   const char *device_id, pappl_pr_driver_data_t *data, ipp_t **driver_attrs, void *cbdata)
 {
@@ -880,6 +980,9 @@ bool pt_driver_cb(pappl_system_t *system, const char *driver_name, const char *d
     data->finishings = PAPPL_FINISHINGS_TRIM;
     if (!*driver_attrs) *driver_attrs = ippNew();
     pt_finishing_attrs(*driver_attrs);
+    /* The patched PAPPL merges this into its standard operations-supported. */
+    if (dev->pid == 0x20af)
+        ippAddInteger(*driver_attrs, IPP_TAG_PRINTER, IPP_TAG_ENUM, "operations-supported", PT_OP_CUT);
 
     data->num_resolution = 1;
     data->x_resolution[0] = data->y_resolution[0] = dpi;

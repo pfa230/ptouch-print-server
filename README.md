@@ -246,6 +246,22 @@ verification only; physical behavior is left to the operator's separate
 validation. Direct geometry probes remain separate evidence; 6/24 mm have
 software coverage only.
 
+### Releasing a held label (PT-P710BT)
+
+A PT-P710BT queue accepts `Ptouch-Cut`, a project-local IPP printer operation with number `0x5f01`, listed in its `operations-supported`. It releases the label or strip held at the end of an unfinished run, such as a `ptouch-chain` or none batch, without a document or a new job. The number is not IANA-registered and stock print dialogs do not offer it; send it with the bundled `ipptool` request:
+
+```sh
+ipptool -tv ipp://HOST:8000/ipp/print/ptouch tests/ptouch-cut.ipptool
+```
+
+Any client allowed to print may cut: the operation uses the Print-Job/Create-Job authorization, so remote clients are allowed when no authentication is configured. The request carries only the standard charset, natural language, `printer-uri`, and optional requesting user; document data and job attributes are rejected. A PT-2730 queue does not advertise the operation and returns `server-error-operation-not-supported`.
+
+The server confirms live tape status, then sends one white raster row as a continuation page in chain mode, followed by FF. Advancing that page cuts the held content free. Nothing is initialized and no earlier label is replayed. The new blank page stays held: a repeated request, or one on a closed run, succeeds without sending anything until a later job holds new content. The next job continues without initialization, and its mandatory precut separates the remaining blank tail. That tail is one 0.141 mm row plus the 14-dot feed margin and the printer's mechanical feed; its total length was not measured, so do not expect waste-free release.
+
+`server-error-busy` means a job, a status read, or another cut owns the printer, or the printer cannot be opened, for example a Bluetooth printer that is off or out of range. Nothing is queued; retry later. `server-error-device-error` means live status reported a fault or unsupported or missing tape, or the cut's completion could not be confirmed. When its message says output is uncertain, recover as for interrupted printing: power-cycle the printer, then restart the server. Cuts are not limited by `PTOUCH_IDLE_POLL_SECONDS`; over Bluetooth the server connects for the action and disconnects afterwards.
+
+Physical release is proven only on PT-P710BT over Bluetooth with 12 mm tape; see [CUT-PROBE.md](tests/CUT-PROBE.md#pt-p710bt-held-label-release). USB and other widths send the same bytes with software coverage only.
+
 ## Configuration
 
 Cutting uses the job's standard finishing choice. `PTOUCH_PRECUT`,

@@ -5,6 +5,8 @@
 #include <arpa/inet.h>
 #include <png.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <cups/raster.h>
 #include "filter_png.h"
 #include "../src/driver.c"
@@ -39,6 +41,12 @@ static bool busy_poll_checked;
 /* Cancel this job during the status read that starts at cancel_read_at. */
 static pappl_job_t *cancel_during_read;
 static size_t cancel_read_at;
+/* Writes of exactly this many bytes fail. */
+static size_t fail_length;
+/* Request Ptouch-Cut for these printers during a status read or a raster write. */
+static pappl_printer_t *cut_during_read, *cut_during_raster;
+static ipp_status_t nested_cut;
+static ipp_status_t cut(pappl_printer_t *printer);
 
 /* The P710BT removes 14 feed dots from each logical page end before output. */
 static bool is_p710bt(void) { return selected_model && selected_model->pid == 0x20af; }
@@ -62,6 +70,10 @@ const pt_dev *pt_usb_model_from_uri(const char *uri)
 bool pt_usb_is_uri(const char *uri) { return pt_usb_model_from_uri(uri) != NULL; }
 static ssize_t feed_status(unsigned *reads, void *buffer, size_t bytes)
 {
+    if (cut_during_read) {
+        pappl_printer_t *printer = cut_during_read;
+        cut_during_read = NULL; nested_cut = cut(printer);
+    }
     pthread_mutex_lock(&fixture_lock);
     (*reads)++;
     if (cancel_during_read && status_used == cancel_read_at) {
@@ -105,7 +117,12 @@ static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
         assert(papplPrinterGetReasons(poll_during_job) == before && usb_reads == reads);
         busy_poll_checked = true;
     }
+    if (n && p[0] == 'G' && cut_during_raster) {
+        pappl_printer_t *printer = cut_during_raster;
+        cut_during_raster = NULL; nested_cut = cut(printer);
+    }
     if (n && p[0] == fail_opcode) return -1;
+    if (n && n == fail_length) return -1;
     if (n == 4 && p[0] == 27 && p[1] == 'i' && p[2] == 'K' && p[3] == fail_advanced) return -1;
     if (counting) {
         if (p[0] == 'G') counts.rows++;
@@ -132,7 +149,7 @@ static pappl_preason_t dev_status(pappl_device_t *d) { (void)d; return PAPPL_PRE
 static char *dev_id(pappl_device_t *d, char *buffer, size_t n)
 { (void)d; snprintf(buffer, n, "%s", selected_id); return buffer; }
 
-static void reset_wire(void) { wire_used = 0; fail_opcode = fail_advanced = -1; }
+static void reset_wire(void) { wire_used = 0; fail_opcode = fail_advanced = -1; fail_length = 0; }
 static void ready_status(int error, size_t chunk)
 {
     memset(statuses, 0, sizeof statuses);
@@ -393,14 +410,9 @@ static void *socket_sink(void *arg)
     return NULL;
 }
 
-/* Real IPP upload, Release-Job scheduling, PNG filter, and TCP device output.
- * Only media/status are fixed; every printing callback is the production one. */
-static pappl_job_t *upload_image(pappl_printer_t *p, const char *finishing, int copies,
-                                 bool collection, ipp_t *media, int width, int black_a, int black_b)
+/* A 180-row grayscale PNG with two black columns, in a new temporary file. */
+static void write_png(char *filename, int width, int black_a, int black_b)
 {
-    bool malformed = finishing && !strcmp(finishing, "malformed");
-    pappl_job_t *j = media_job(p, finishing, copies, collection, media);
-    char filename[] = "/tmp/ptouch-finishing-png-XXXXXX";
     int fd = mkstemp(filename); assert(fd >= 0);
     FILE *file = fdopen(fd, "wb"); assert(file);
     png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
@@ -418,8 +430,19 @@ static pappl_job_t *upload_image(pappl_printer_t *p, const char *finishing, int 
         png_write_row(png, pixels);
     }
     png_write_end(png, info); png_destroy_write_struct(&png, &info); fclose(file);
+}
+
+/* Real IPP upload, Release-Job scheduling, PNG filter, and TCP device output.
+ * Only media/status are fixed; every printing callback is the production one. */
+static pappl_job_t *upload_image(pappl_printer_t *p, const char *finishing, int copies,
+                                 bool collection, ipp_t *media, int width, int black_a, int black_b)
+{
+    bool malformed = finishing && !strcmp(finishing, "malformed");
+    pappl_job_t *j = media_job(p, finishing, copies, collection, media);
+    char filename[] = "/tmp/ptouch-finishing-png-XXXXXX";
+    write_png(filename, width, black_a, black_b);
     if (malformed) {
-        file = fopen(filename, "wb"); assert(file);
+        FILE *file = fopen(filename, "wb"); assert(file);
         assert(fwrite("bad PNG", 1, 7, file) == 7); fclose(file);
     }
     char resource[128], uri[256];
@@ -868,7 +891,7 @@ static void clean_snapshot(void)
 }
 
 /* Bluetooth: identical driver bytes, its own status path, and no USB access. */
-static void bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_device_t *d)
+static pappl_printer_t *bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_device_t *d)
 {
     const char *bt_uri = "ptouch-bt://Brother/PT-P710BT/A4:C1:38:AB:CD:EF";
     pappl_pr_driver_data_t rejected = {0}; ipp_t *attrs = NULL;
@@ -952,6 +975,7 @@ static void bluetooth_cases(pappl_system_t *sys, pappl_printer_t *usb, pappl_dev
     can_open = true; state->idle_poll_seconds = -1;
 
     assert(usb_enumerations == enumerations && usb_reads == reads);
+    return bt;
 }
 
 /* Tape width of the last print-information command on the wire. */
@@ -1124,10 +1148,358 @@ static void wait_cases(pappl_printer_t *usb, pappl_device_t *d)
     pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, before.media_ready));
 }
 
+/* Ptouch-Cut on its own connection, so job and status threads can request it too. */
+static char cut_message[256];
+static ipp_status_t send_cut(const char *host, pappl_printer_t *printer, ipp_t *request, const char *file)
+{
+    http_t *connection = httpConnect2(host, port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL);
+    assert(connection);
+    if (!request) request = printer_request(printer, PT_OP_CUT);
+    char resource[128]; snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
+    ipp_t *reply = file ? cupsDoFileRequest(connection, request, resource, file) :
+                          cupsDoRequest(connection, request, resource);
+    ipp_status_t status = reply ? ippGetStatusCode(reply) : cupsLastError();
+    ipp_attribute_t *message = reply ? ippFindAttribute(reply, "status-message", IPP_TAG_TEXT) : NULL;
+    snprintf(cut_message, sizeof cut_message, "%s", message ? ippGetString(message, 0, NULL) : "");
+    ippDelete(reply); httpClose(connection);
+    return status;
+}
+static ipp_status_t cut(pappl_printer_t *printer) { return send_cut("localhost", printer, NULL, NULL); }
+
+/* The wire holds an optional status request, then exactly the blank continuation. */
+static void expect_cut_wire(bool status_request, int tape)
+{
+    unsigned char expected[64]; size_t n = 0;
+    if (status_request) { memcpy(expected, "\x1b\x69\x53", 3); n = 3; }
+    n += pt_cmd_blank_continuation(expected + n, (uint8_t)tape);
+    pthread_mutex_lock(&fixture_lock);
+    assert(wire_used == n && !memcmp(wire, expected, n));
+    pthread_mutex_unlock(&fixture_lock);
+}
+
+static unsigned named(ipp_t *reply, const char *name)
+{
+    unsigned n = 0;
+    for (ipp_attribute_t *a = ippFirstAttribute(reply); a; a = ippNextAttribute(reply))
+        if (ippGetName(a) && !strcmp(ippGetName(a), name)) n++;
+    return n;
+}
+
+/* PAPPL 1.4.11's standard printer operations, plus Ptouch-Cut on P710BT only. */
+static void expect_operations(ipp_attribute_t *ops, bool cut_supported)
+{
+    static const ipp_op_t standard[] = {
+        IPP_OP_PRINT_JOB, IPP_OP_VALIDATE_JOB, IPP_OP_CREATE_JOB, IPP_OP_SEND_DOCUMENT,
+        IPP_OP_CANCEL_JOB, IPP_OP_GET_JOB_ATTRIBUTES, IPP_OP_GET_JOBS, IPP_OP_GET_PRINTER_ATTRIBUTES,
+        IPP_OP_PAUSE_PRINTER, IPP_OP_RESUME_PRINTER, IPP_OP_SET_PRINTER_ATTRIBUTES,
+        IPP_OP_GET_PRINTER_SUPPORTED_VALUES, IPP_OP_CREATE_PRINTER_SUBSCRIPTIONS,
+        IPP_OP_CREATE_JOB_SUBSCRIPTIONS, IPP_OP_GET_SUBSCRIPTION_ATTRIBUTES, IPP_OP_GET_SUBSCRIPTIONS,
+        IPP_OP_RENEW_SUBSCRIPTION, IPP_OP_CANCEL_SUBSCRIPTION, IPP_OP_GET_NOTIFICATIONS,
+        IPP_OP_ENABLE_PRINTER, IPP_OP_DISABLE_PRINTER, IPP_OP_PAUSE_PRINTER_AFTER_CURRENT_JOB,
+        IPP_OP_CANCEL_CURRENT_JOB, IPP_OP_CANCEL_JOBS, IPP_OP_CANCEL_MY_JOBS, IPP_OP_CLOSE_JOB,
+        IPP_OP_IDENTIFY_PRINTER, IPP_OP_HOLD_JOB, IPP_OP_RELEASE_JOB, IPP_OP_HOLD_NEW_JOBS,
+        IPP_OP_RELEASE_HELD_NEW_JOBS,
+    };
+    const int count = (int)(sizeof standard / sizeof standard[0]);
+    assert(ops && ippGetValueTag(ops) == IPP_TAG_ENUM && ippGetCount(ops) == count + cut_supported);
+    for (int i = 0; i < count; i++) assert(ippContainsInteger(ops, standard[i]));
+    assert(ippContainsInteger(ops, PT_OP_CUT) == cut_supported);
+}
+
+/* One complete operations-supported per printer, honoring requested attributes. */
+static void check_operations(pappl_printer_t *printer, bool cut_supported)
+{
+    const char *requests[] = {NULL, "operations-supported", "printer-description", "printer-name"};
+    for (unsigned i = 0; i < 4; i++) {
+        ipp_t *q = printer_request(printer, IPP_OP_GET_PRINTER_ATTRIBUTES);
+        if (requests[i]) ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", NULL, requests[i]);
+        ipp_t *reply = printer_response(printer, q);
+        assert(ippGetStatusCode(reply) == IPP_STATUS_OK);
+        assert(named(reply, "operations-supported") == (i < 3));
+        if (i < 3) expect_operations(ippFindAttribute(reply, "operations-supported", IPP_TAG_ZERO), cut_supported);
+        if (i == 1) assert(!named(reply, "printer-name"));
+        ippDelete(reply);
+    }
+    /* Get-Printers merges each printer's operations into its own attribute. */
+    char uri[128]; snprintf(uri, sizeof uri, "ipp://localhost:%d/ipp/system", port);
+    ipp_t *q = ippNewRequest(IPP_OP_GET_PRINTERS);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_URI, "system-uri", NULL, uri);
+    const char *names[] = {"printer-name", "operations-supported"};
+    ippAddStrings(q, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", 2, NULL, names);
+    ipp_t *reply = cupsDoRequest(http, q, "/ipp/system"); assert(reply);
+    unsigned printers = named(reply, "printer-name");
+    assert(printers > 1 && named(reply, "operations-supported") == printers);
+    for (ipp_attribute_t *a = ippFirstAttribute(reply); a; a = ippNextAttribute(reply))
+        if (ippGetName(a) && !strcmp(ippGetName(a), "operations-supported")) expect_operations(a, cut_supported);
+    ippDelete(reply);
+}
+
+/* PT-2730 neither advertises nor implements the action. */
+static void cut_unsupported(pappl_printer_t *usb)
+{
+    check_operations(usb, false);
+    pt_run_set(usb, PT_RUN_OPEN); reset_wire();
+    unsigned opened = opens, reads = usb_reads;
+    assert(cut(usb) == IPP_STATUS_ERROR_OPERATION_NOT_SUPPORTED);
+    assert(wire_used == 0 && opens == opened && usb_reads == reads && pt_run_get(usb) == PT_RUN_OPEN);
+    pt_run_set(usb, PT_RUN_CLOSED);
+}
+
+/* Ptouch-Cut through real IPP on live USB and Bluetooth fixtures. */
+static void cut_cases(pappl_printer_t *usb, pappl_printer_t *bt, pappl_device_t *d)
+{
+    const int twelve = 12;
+    static unsigned char strip[sizeof wire];
+    pappl_media_col_t media12; assert(media_col_for(12, 10000, 180, &media12));
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    check_operations(usb, true);
+    /* A held chain label and a joined none strip are released by one white row:
+     * no job, no replayed raster, and repeats send nothing. */
+    const char *held[] = {"ptouch-chain", "none"};
+    for (unsigned i = 0; i < 2; i++) {
+        transport_batch(usb, held[i], d, strip);
+        assert(pt_run_get(usb) == PT_RUN_OPEN);
+        int jobs = papplPrinterGetNumberOfJobs(usb);
+        unsigned opened = opens;
+        queue_tapes(&twelve, 1, true); reset_wire();
+        assert(cut(usb) == IPP_STATUS_OK);
+        expect_cut_wire(true, 12);
+        assert(status_used == status_size && opens == opened + 1);
+        assert(pt_run_get(usb) == PT_RUN_OPEN_BLANK && papplPrinterGetNumberOfJobs(usb) == jobs);
+        reset_wire(); unsigned reads = usb_reads;
+        assert(cut(usb) == IPP_STATUS_OK && cut(usb) == IPP_STATUS_OK);
+        assert(wire_used == 0 && usb_reads == reads && opens == opened + 3);
+        assert(pt_run_get(usb) == PT_RUN_OPEN_BLANK);
+    }
+    /* The next batch continues the blank page without initialization; its FF
+     * holds user content again, which a later cut releases. */
+    reset_wire(); clean_snapshot();
+    pappl_job_t *j = job(usb, "none", 1, false);
+    pappl_pr_options_t *o = begin(j, d);
+    assert(page_test(j, o, d)); ready_status(0, 32); end(j, o, d);
+    expect_wire(0, 1, 1, 0); assert(pt_run_get(usb) == PT_RUN_OPEN);
+    queue_tapes(&twelve, 1, true); reset_wire();
+    assert(cut(usb) == IPP_STATUS_OK); expect_cut_wire(true, 12);
+    assert(pt_run_get(usb) == PT_RUN_OPEN_BLANK);
+    /* A trim batch after release closes the run; a cut on a closed run sends nothing. */
+    reset_wire(); clean_snapshot();
+    j = job(usb, "trim", 1, false); o = begin(j, d);
+    assert(page_test(j, o, d)); ready_status(0, 32); end(j, o, d);
+    expect_wire(0, 1, 0, 1); assert(pt_run_get(usb) == PT_RUN_CLOSED);
+    reset_wire();
+    assert(cut(usb) == IPP_STATUS_OK && wire_used == 0 && pt_run_get(usb) == PT_RUN_CLOSED);
+    /* Rejected and canceled followers preserve the blank continuation. */
+    pt_run_set(usb, PT_RUN_OPEN_BLANK); reset_wire();
+    for (unsigned i = 0; i < 2; i++) {
+        clean_snapshot();
+        j = job(usb, "trim", 1, false); o = papplJobCreatePrintOptions(j, 1, false);
+        assert(r_startjob(j, o, d));
+        if (i) papplJobCancel(j);
+        else o->header.cupsWidth++;
+        assert(!r_startpage(j, o, d, 0)); end(j, o, d);
+    }
+    size_t other;
+    assert(status_requests(&other) == 2 && !other && pt_run_get(usb) == PT_RUN_OPEN_BLANK);
+    reset_wire(); assert(cut(usb) == IPP_STATUS_OK && wire_used == 0);
+    /* A cassette change invalidates either open state, idle or during the action. */
+    clean_snapshot(); statuses[10] = 24; reset_wire();
+    assert(status_cb(usb) && pt_run_get(usb) == PT_RUN_CLOSED);
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    const int changed = 24;
+    pt_run_set(usb, PT_RUN_OPEN); queue_tapes(&changed, 1, false); reset_wire();
+    assert(cut(usb) == IPP_STATUS_OK && wire_used == 3 && pt_run_get(usb) == PT_RUN_CLOSED);
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    /* Faulted, missing, or empty live status refuses without the blank row. */
+    for (unsigned i = 0; i < 3; i++) {
+        pt_run_set(usb, PT_RUN_OPEN); clean_snapshot();
+        if (i == 0) statuses[8] = 4;
+        else if (i == 1) status_size = 0;
+        else statuses[10] = 0;
+        reset_wire();
+        assert(cut(usb) == IPP_STATUS_ERROR_DEVICE && wire_used == 3);
+        assert(pt_run_get(usb) == (i == 2 ? PT_RUN_CLOSED : PT_RUN_OPEN));
+    }
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    /* A stale ready notification precedes the snapshot, and fragmented
+     * replies still reach the blank page's own receive-ready. */
+    pt_run_set(usb, PT_RUN_OPEN); queue_tapes(&twelve, 1, true);
+    memmove(statuses + 32, statuses, 128); memcpy(statuses, statuses + 128, 32);
+    status_size = 160; status_chunk = 7; reset_wire();
+    assert(cut(usb) == IPP_STATUS_OK && status_used == 160);
+    expect_cut_wire(true, 12); assert(pt_run_get(usb) == PT_RUN_OPEN_BLANK);
+    /* Completion without receive-ready, an error phase, a lost link, or a failed
+     * transfer leaves output uncertain; repeats, polls and jobs then send nothing. */
+    for (unsigned i = 0; i < 4; i++) {
+        pt_run_set(usb, PT_RUN_OPEN); queue_tapes(&twelve, 1, true); reset_wire();
+        if (i == 0) status_error_at = 96;
+        else if (i == 1) statuses[96 + 8] = 4;
+        else if (i == 2) status_error_at = 32;
+        else fail_length = 57;
+        assert(cut(usb) == IPP_STATUS_ERROR_DEVICE);
+        if (i < 3) expect_cut_wire(true, 12);
+        else assert(wire_used == 3);
+        assert(strstr(cut_message, "output uncertain: power-cycle printer, then restart server"));
+        assert(pt_run_get(usb) == PT_RUN_UNCERTAIN);
+        status_error_at = SIZE_MAX; ready_status(0, 32); reset_wire();
+        assert(cut(usb) == IPP_STATUS_ERROR_DEVICE && wire_used == 0 && status_used == 0);
+        assert(strstr(cut_message, "Output uncertain: power-cycle printer, then restart server"));
+        assert(status_cb(usb) && wire_used == 0);
+        j = job(usb, "trim", 1, false); o = papplJobCreatePrintOptions(j, 1, false);
+        assert(!r_startjob(j, o, d) && wire_used == 0); end(j, o, d);
+        assert(pt_run_get(usb) == PT_RUN_UNCERTAIN);
+    }
+    /* Ownership held elsewhere, or an open failure, is busy: no output, no
+     * read, and nothing runs later on the request's behalf. */
+    pt_run_set(usb, PT_RUN_OPEN); reset_wire();
+    unsigned reads = usb_reads;
+    assert(papplPrinterOpenDevice(usb));
+    assert(cut(usb) == IPP_STATUS_ERROR_BUSY);
+    papplPrinterCloseDevice(usb);
+    can_open = false; assert(cut(usb) == IPP_STATUS_ERROR_BUSY); can_open = true;
+    assert(strstr(cut_message, "busy or unavailable"));
+    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    assert(wire_used == 0 && usb_reads == reads && pt_run_get(usb) == PT_RUN_OPEN);
+    /* A poll or another cut owns the device during its status read. */
+    clean_snapshot(); cut_during_read = usb; reset_wire();
+    assert(status_cb(usb) && !cut_during_read && nested_cut == IPP_STATUS_ERROR_BUSY);
+    assert(wire_used == 3 && pt_run_get(usb) == PT_RUN_OPEN);
+    queue_tapes(&twelve, 1, true); cut_during_read = usb; reset_wire();
+    assert(cut(usb) == IPP_STATUS_OK && !cut_during_read && nested_cut == IPP_STATUS_ERROR_BUSY);
+    expect_cut_wire(true, 12);
+    /* A scheduled job owns the device while it sends raster. */
+    pt_run_set(usb, PT_RUN_OPEN);
+    const int tapes[] = {12, 12}; queue_tapes(tapes, 2, true); reset_wire();
+    pappl_job_t *printing = upload_png(usb, "none", 1, false);
+    cut_during_raster = usb; nested_cut = IPP_STATUS_OK;
+    assert(papplJobRelease(printing, "test")); await_terminal(printing);
+    assert(!cut_during_raster && nested_cut == IPP_STATUS_ERROR_BUSY);
+    assert(papplJobGetState(printing) == IPP_JSTATE_COMPLETED);
+    expect_wire(0, tx(180), 1, 0); assert(pt_run_get(usb) == PT_RUN_OPEN);
+    /* Explicit cuts ignore disabled or rate-limited polling and keep its slot. */
+    pt_printer_state *state = pt_state(usb);
+    for (int seconds = 0; seconds <= 300; seconds += 300) {
+        state->idle_poll_seconds = seconds; state->idle_polled = seconds != 0;
+        clock_gettime(CLOCK_MONOTONIC, &state->last_idle_poll);
+        struct timespec slot = state->last_idle_poll;
+        pt_run_set(usb, PT_RUN_OPEN); queue_tapes(&twelve, 1, true); reset_wire();
+        unsigned opened = opens;
+        assert(cut(usb) == IPP_STATUS_OK); expect_cut_wire(true, 12);
+        assert(opens == opened + 1 && state->idle_polled == (seconds != 0));
+        assert(!memcmp(&slot, &state->last_idle_poll, sizeof slot));
+        assert(status_cb(usb) && opens == opened + 1);
+    }
+    state->idle_poll_seconds = -1;
+    /* Bluetooth reconnects for the action with the USB bytes, and a lost link
+     * leaves recovery required without any USB fallback. */
+    unsigned enumerations = usb_enumerations, opened = opens, bt_before = bt_reads;
+    reads = usb_reads;
+    pt_run_set(bt, PT_RUN_OPEN); queue_tapes(&twelve, 1, true); reset_wire();
+    assert(cut(bt) == IPP_STATUS_OK); expect_cut_wire(true, 12);
+    assert(opens == opened + 1 && bt_reads > bt_before && pt_run_get(bt) == PT_RUN_OPEN_BLANK);
+    pt_run_set(bt, PT_RUN_OPEN); queue_tapes(&twelve, 1, true); status_error_at = 32; reset_wire();
+    assert(cut(bt) == IPP_STATUS_ERROR_DEVICE); expect_cut_wire(true, 12);
+    assert(pt_run_get(bt) == PT_RUN_UNCERTAIN);
+    status_error_at = SIZE_MAX;
+    assert(usb_enumerations == enumerations && usb_reads == reads);
+    pt_run_set(bt, PT_RUN_CLOSED);
+    /* Job and document data, other targets, and unknown queues are rejected
+     * before the device is opened. */
+    pt_run_set(usb, PT_RUN_OPEN); reset_wire(); opened = opens;
+    ipp_t *q = printer_request(usb, PT_OP_CUT);
+    ippAddInteger(q, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
+    assert(send_cut("localhost", usb, q, NULL) == IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES);
+    q = printer_request(usb, PT_OP_CUT);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/png");
+    assert(send_cut("localhost", usb, q, NULL) == IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES);
+    q = printer_request(usb, PT_OP_CUT);
+    ippAddInteger(q, IPP_TAG_OPERATION, IPP_TAG_INTEGER, "job-id", papplJobGetID(printing));
+    assert(send_cut("localhost", usb, q, NULL) == IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES);
+    char document[] = "/tmp/ptouch-cut-document-XXXXXX";
+    write_png(document, 85, 0, 1);
+    assert(send_cut("localhost", usb, NULL, document) == IPP_STATUS_ERROR_BAD_REQUEST);
+    unlink(document);
+    char uri[128]; snprintf(uri, sizeof uri, "ipp://localhost:%d/ipp/system", port);
+    q = ippNewRequest(PT_OP_CUT);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_URI, "system-uri", NULL, uri);
+    ippAddInteger(q, IPP_TAG_OPERATION, IPP_TAG_INTEGER, "printer-id", papplPrinterGetID(usb));
+    assert(send_cut("localhost", usb, q, NULL) == IPP_STATUS_ERROR_ATTRIBUTES_OR_VALUES);
+    snprintf(uri, sizeof uri, "ipp://localhost:%d/ipp/print/missing", port);
+    q = ippNewRequest(PT_OP_CUT);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
+    assert(send_cut("localhost", usb, q, NULL) == IPP_STATUS_ERROR_NOT_FOUND);
+    assert(wire_used == 0 && opens == opened && pt_run_get(usb) == PT_RUN_OPEN);
+    pt_run_set(usb, PT_RUN_CLOSED);
+}
+
+/* A non-localhost peer without authentication may print and cut. */
+static void remote_cases(pappl_printer_t *printer, const char *address)
+{
+    http_t *remote = httpConnect2(address, port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL);
+    assert(remote);
+    http_addr_t peer; socklen_t length = sizeof peer;
+    assert(!getsockname(httpGetFd(remote), (struct sockaddr *)&peer, &length) && !httpAddrLocalhost(&peer));
+    pt_run_set(printer, PT_RUN_CLOSED); reset_wire();
+    char document[] = "/tmp/ptouch-remote-png-XXXXXX";
+    write_png(document, 85, 40, 41);
+    ipp_t *q = printer_request(printer, IPP_OP_PRINT_JOB);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/png");
+    ippAddInteger(q, IPP_TAG_JOB, IPP_TAG_ENUM, "finishings", IPP_FINISHINGS_NONE);
+    char resource[128]; snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
+    ipp_t *reply = cupsDoFileRequest(remote, q, resource, document); unlink(document);
+    assert(reply && ippGetStatusCode(reply) == IPP_STATUS_OK);
+    pappl_job_t *printed = papplPrinterFindJob(printer, ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0));
+    ippDelete(reply); httpClose(remote);
+    assert(printed); await_terminal(printed);
+    assert(papplJobGetState(printed) == IPP_JSTATE_COMPLETED && pt_run_get(printer) == PT_RUN_OPEN);
+    reset_wire();
+    assert(send_cut(address, printer, NULL, NULL) == IPP_STATUS_OK);
+    expect_cut_wire(false, 12); assert(pt_run_get(printer) == PT_RUN_OPEN_BLANK);
+}
+
+/* First up non-loopback IPv4 address, so a request reaches PAPPL as a network peer. */
+static bool network_address(char *out, size_t size)
+{
+    struct ifaddrs *list; assert(!getifaddrs(&list));
+    bool found = false;
+    for (struct ifaddrs *i = list; i && !found; i = i->ifa_next)
+        if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET &&
+            (i->ifa_flags & IFF_UP) && !(i->ifa_flags & IFF_LOOPBACK))
+            found = inet_ntop(AF_INET, &((struct sockaddr_in *)i->ifa_addr)->sin_addr, out, (socklen_t)size);
+    freeifaddrs(list);
+    return found;
+}
+
+static http_status_t deny_printing(pappl_client_t *client, const char *group, gid_t gid, void *data)
+{
+    (void)client; (void)group; (void)gid; (void)data;
+    return HTTP_STATUS_FORBIDDEN;
+}
+
+/* A configured printing policy denies Print-Job and Ptouch-Cut alike, before
+ * any job or device access. */
+static void denied_cases(pappl_printer_t *printer)
+{
+    pt_run_set(printer, PT_RUN_OPEN); reset_wire();
+    unsigned opened = opens;
+    char document[] = "/tmp/ptouch-denied-png-XXXXXX";
+    write_png(document, 85, 40, 41);
+    ipp_t *q = printer_request(printer, IPP_OP_PRINT_JOB);
+    ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/png");
+    char resource[128]; snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(printer));
+    ipp_t *reply = cupsDoFileRequest(http, q, resource, document); unlink(document);
+    assert(!reply && cupsLastError() == IPP_STATUS_ERROR_FORBIDDEN);
+    assert(cut(printer) == IPP_STATUS_ERROR_FORBIDDEN);
+    assert(wire_used == 0 && opens == opened && papplPrinterGetNumberOfJobs(printer) == 0);
+    assert(pt_run_get(printer) == PT_RUN_OPEN);
+}
+
 int main(int argc, char **argv)
 {
-    assert(argc <= 2);
-    selected_model = pt_usb_supported_model(argc == 2 ? argv[1] : NULL); assert(selected_model);
+    /* An optional "deny" runs only the configured-printing-policy checks. */
+    bool deny = argc == 3 && !strcmp(argv[2], "deny");
+    assert(argc <= 2 || deny);
+    selected_model = pt_usb_supported_model(argc >= 2 ? argv[1] : NULL); assert(selected_model);
+    bool p710bt = selected_model->pid == 0x20af;
     snprintf(selected_id, sizeof selected_id, "MFG:Brother;MDL:%s;CMD:PT-CBP;", selected_model->name);
     snprintf(selected_uri, sizeof selected_uri, "ptouch://Brother/%s", selected_model->name);
     pappl_pr_driver_t driver = {"brother_ptouch", "Test", NULL, NULL};
@@ -1141,6 +1513,8 @@ int main(int argc, char **argv)
     pappl_system_t *sys = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "finishing-test", port,
                                           NULL, NULL, "/tmp/ptouch-driver-test.log", PAPPL_LOGLEVEL_ERROR, NULL, false);
     assert(sys);
+    papplSystemSetOperationCallback(sys, pt_cut_op_cb, NULL);
+    if (deny) papplSystemSetAuthCallback(sys, "Basic", deny_printing, NULL);
     /* Recognition metadata cannot select the PT-2730 protocol for another model. */
     const char *unsupported_ids[] = {"MFG:Brother;MDL:PT-P700;", "MFG:Brother;MDL:unknown;", ""};
     for (size_t i = 0; i < sizeof unsupported_ids / sizeof unsupported_ids[0]; i++) {
@@ -1165,10 +1539,26 @@ int main(int argc, char **argv)
                          selected_id, "socket://127.0.0.1:9"); assert(p);
     papplSystemAddMIMEFilter(sys, "image/png", "image/png", pt_filter_png, NULL);
     assert(papplSystemAddListeners(sys, "localhost"));
+    char network[INET_ADDRSTRLEN] = "";
+    if (p710bt && !deny) {
+        if (!network_address(network, sizeof network))
+            fprintf(stderr, "No non-loopback IPv4 address for the network-peer authorization check\n");
+        assert(*network && papplSystemAddListeners(sys, network));
+    }
     pthread_t server; assert(!pthread_create(&server, NULL, run_server, sys));
     http = httpConnect2("localhost", port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL);
     assert(http);
     pappl_device_t *d = papplDeviceOpen("fixture://test", "fixture", NULL, NULL); assert(d);
+    if (deny) {
+        assert(p710bt);
+        pappl_printer_t *denied = papplPrinterCreate(sys, 0, "denied", "brother_ptouch",
+                                  selected_id, "fixture://denied"); assert(denied);
+        denied_cases(denied);
+        papplDeviceClose(d); httpClose(http); papplSystemShutdown(sys);
+        pthread_join(server, NULL); papplSystemDelete(sys);
+        puts("driver printing-policy checks passed");
+        return 0;
+    }
     /* USB presence cannot change the transport selected for this printer. */
     reset_wire();
     unsigned enumeration_before = usb_enumerations, reads_before = usb_reads;
@@ -1479,7 +1869,14 @@ int main(int argc, char **argv)
     o = papplJobCreatePrintOptions(j, 1, false); assert(o->header.cupsWidth == 85);
     papplJobDeletePrintOptions(o);
 
-    if (selected_model->pid == 0x20af) bluetooth_cases(sys, usb, d);
+    if (p710bt) {
+        cut_cases(usb, bluetooth_cases(sys, usb, d), d);
+        pappl_printer_t *remote = papplPrinterCreate(sys, 0, "remote", "brother_ptouch",
+                                  selected_id, "fixture://remote"); assert(remote);
+        remote_cases(remote, network);
+    } else {
+        cut_unsupported(usb);
+    }
 
     /* State belongs to each queue, with no arbitrary eight-printer ceiling. */
     for (int i = 0; i < 10; i++) {
