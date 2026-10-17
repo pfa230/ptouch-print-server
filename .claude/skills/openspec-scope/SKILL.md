@@ -5,7 +5,7 @@ description: Prepare selected GitHub issues as individually committed OpenSpec p
 
 # Attend a scoping session
 
-Prepare native OpenSpec proposals with the user. The deterministic commands create and deliver the session; the user chooses issues, settles material decisions and chooses when to continue or finish. Scoping does not implement, enroll or archive changes, and leaves source issues open.
+Prepare native OpenSpec proposals with the user. The deterministic commands create and deliver the session; the user chooses issues, settles material decisions and chooses when to finish. Scoping does not implement, enroll or archive changes, and leaves source issues open.
 
 ## Permissions and working directories
 
@@ -17,14 +17,14 @@ Prepare native OpenSpec proposals with the user. The deterministic commands crea
 ## Select and start
 
 1. List open issues using the repository's issue-listing workflow. Otherwise read them with `gh issue list` and relevant details with `gh issue view`; explain an order favoring blockers, correctness work and small work whose decisions are settled. Wait for the user to select issues before drafting. An issue selection already given by the user counts; do not ask for it again.
-2. Use the user's session name, or agree on one, then run `loop scope start <session>` from the invoking checkout. It creates `scope/<session>` and `<worktrees>/scope-<session>` from the configured local default branch without fetching or changing that branch. Git validates the generated branch name. Show the reported path, branch and finish command.
+2. Use the user's session name if supplied; otherwise derive a short descriptive name from the selected issues without asking for confirmation. Run `loop scope start <session>` from the invoking checkout. It creates `scope/<session>` and `<worktrees>/scope-<session>` from the configured local default branch without fetching or changing that branch. Git validates the generated branch name. Show the reported path, branch and finish command.
 3. To continue interrupted work or handle an existing-session refusal, inspect `git worktree list`, then read the existing session's files, `git status` and `git log`. Reopen that worktree without replacing the branch or checkout. If finish cannot find a session during a detached manual rebase, complete or abort that rebase or restore its checkout before retrying. Completed commits and unfinished drafts are the recovery record; no separate session state is needed.
 
 ## Propose one selected issue at a time
 
 1. Read the selected issue, its comments and relevant project context. Invoke native OpenSpec proposing from the session worktree for one coherent implementable change. Verify its root and artifact paths as above.
-2. Respect the native proposal's planning boundary. If proposing returns for review, show the artifacts and wait for the user to request the next action before resuming scoping. A scoping invocation does not authorize bypassing that boundary or starting implementation.
-3. With the user, inspect the generated proposal, design, spec deltas and tasks. Ask about unresolved choices that materially affect behavior or scope and stop until answered. Use explicit defaults for routine choices, recording them as defaults in `design.md`; record the user's material decisions there as well. Do not silently choose behavior so later unattended implementation can proceed.
+2. Native proposing returns to this scoping workflow for artifact review and commit. Show the artifacts and continue without requiring a new user request unless the user requested a review pause. Do not start implementation.
+3. Inspect the generated proposal, design, spec deltas and tasks. Ask about unresolved choices that materially affect behavior or scope and stop until answered. Use explicit defaults for routine choices, recording them as defaults in `design.md`; record the user's material decisions there as well. Do not silently choose behavior so later unattended implementation can proceed.
 4. Trim to one coherent change and record non-goals. Explicit invocation of this skill authorizes filing omitted requested work as follow-up GitHub issues. Follow the repository's issue conventions, check for an existing follow-up, and create only the necessary follow-ups. Each must link the source issue URL and name the OpenSpec change; link it from the proposal's non-goals. The proposal need not be published and no proposal URL is required. Use a structured body argument or a body file for multiline issue text. Do not file unrelated work or close the source issue.
 5. Record `Source issue: <URL>` in `proposal.md`. Once that proposal's artifacts are ready, inspect its diff and stage only `openspec/changes/<change>/` in the session worktree. Inspect the staged paths to avoid including another proposal or unrelated staged work, then commit that proposal separately, for example:
 
@@ -35,7 +35,7 @@ Prepare native OpenSpec proposals with the user. The deterministic commands crea
    ```
 
    Use the actual change name and source issue number, without closing keywords. Each completed proposal gets its own artifact-only commit before moving to another issue. Do not invent artifact-content checks or Git hooks.
-6. Show the finished proposal commit and remaining issues, then continue or finish when the user chooses. If interrupted, leave the draft in place; resume by inspecting the same files and Git history.
+6. Show the finished proposal commit and remaining issues, then proceed to the next selected issue unless the user requested a review pause. When the selection is exhausted, report the completed proposals and wait for the user to choose more issues or finish. If interrupted, leave the draft in place; resume by inspecting the same files and Git history.
 
 ## Finish and recover
 
