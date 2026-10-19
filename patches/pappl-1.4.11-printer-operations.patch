@@ -1,5 +1,5 @@
 diff --git a/pappl/job-process.c b/pappl/job-process.c
-index 3fb7a2a..da98fad 100644
+index 3fb7a2a..491feac 100644
 --- a/pappl/job-process.c
 +++ b/pappl/job-process.c
 @@ -1203,14 +1203,17 @@ finish_job(pappl_job_t  *job)		// I - Job
@@ -26,12 +26,12 @@ index 3fb7a2a..da98fad 100644
  
      _papplRWUnlock(printer);
    }
-@@ -1241,6 +1244,16 @@ start_job(pappl_job_t *job)		// I - Job
+@@ -1241,6 +1244,25 @@ start_job(pappl_job_t *job)		// I - Job
    _papplRWLockWrite(printer);
    _papplRWLockWrite(job);
  
 +  // Wait for any cut accepted before this job to run first...
-+  while (_papplPrinterCutBarrierNoLock(printer, job) && !printer->is_deleted && !job->is_canceled && papplSystemIsRunning(printer->system))
++  while (_papplPrinterCutBarrierNoLock(printer, job) && !printer->is_deleted && !job->is_canceled && job->state < IPP_JSTATE_CANCELED && papplSystemIsRunning(printer->system))
 +  {
 +    _papplRWUnlock(job);
 +    _papplRWUnlock(printer);
@@ -40,17 +40,45 @@ index 3fb7a2a..da98fad 100644
 +    _papplRWLockWrite(job);
 +  }
 +
++  // A cancellation while waiting must not be overwritten by the processing
++  // state, and must not reach device acquisition or output.
++  if (job->is_canceled || job->state >= IPP_JSTATE_CANCELED)
++  {
++    _papplRWUnlock(job);
++    _papplRWUnlock(printer);
++    return (false);
++  }
++
    papplLogJob(job, PAPPL_LOGLEVEL_INFO, "Starting print job.");
  
    job->state              = IPP_JSTATE_PROCESSING;
 diff --git a/pappl/job.c b/pappl/job.c
-index 3141759..72a9e3f 100644
+index 3141759..c198aad 100644
 --- a/pappl/job.c
 +++ b/pappl/job.c
-@@ -956,6 +956,12 @@ _papplPrinterCheckJobsNoLock(
+@@ -28,7 +28,9 @@ papplJobCancel(pappl_job_t *job)	// I - Job
+   _papplRWLockWrite(job->printer);
+   _papplRWLockWrite(job);
+ 
+-  if (job->state == IPP_JSTATE_PROCESSING || (job->state == IPP_JSTATE_HELD && job->fd >= 0))
++  if (job->state == IPP_JSTATE_PROCESSING ||
++      (job->streaming && job->state == IPP_JSTATE_PENDING) ||
++      (job->state == IPP_JSTATE_HELD && job->fd >= 0))
+   {
+     job->is_canceled = true;
+   }
+@@ -956,6 +958,20 @@ _papplPrinterCheckJobsNoLock(
      {
        pthread_t	t;			// Thread
  
++      if (job->streaming)
++      {
++	// The request thread owns this streaming-raster job; leave it and any
++	// later jobs in place instead of dispatching the job a second time.
++	papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Streaming job %d is owned by its request.", job->job_id);
++	break;
++      }
++
 +      if (_papplPrinterCutBarrierNoLock(printer, job))
 +      {
 +	papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Holding job %d behind a queued cut.", job->job_id);
@@ -61,7 +89,7 @@ index 3141759..72a9e3f 100644
  
        if (pthread_create(&t, NULL, (void *(*)(void *))_papplJobProcess, job))
 diff --git a/pappl/printer-accessors.c b/pappl/printer-accessors.c
-index 66958a2..b9c5c59 100644
+index 66958a2..c570c85 100644
 --- a/pappl/printer-accessors.c
 +++ b/pappl/printer-accessors.c
 @@ -895,6 +895,40 @@ papplPrinterIterateCompletedJobs(
@@ -115,7 +143,7 @@ index 66958a2..b9c5c59 100644
    {
  //    papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Opening device for status/maintenance.");
  
-@@ -921,6 +956,87 @@ papplPrinterOpenDevice(
+@@ -921,6 +956,93 @@ papplPrinterOpenDevice(
  }
  
  
@@ -193,6 +221,12 @@ index 66958a2..b9c5c59 100644
 +    printer->waiters = waiter->next;
 +
 +  free(waiter);
++
++  // Removing the barrier may let work accepted before this acquisition start;
++  // resume scheduling when the device could not be acquired.
++  if (!device && !printer->is_deleted && papplSystemIsRunning(printer->system) &&
++      cupsArrayGetCount(printer->active_jobs) > 0 && !printer->processing_job)
++    _papplPrinterCheckJobsNoLock(printer);
 +
 +  _papplRWUnlock(printer);
 +
