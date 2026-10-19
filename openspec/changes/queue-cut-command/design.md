@@ -26,6 +26,10 @@ Use PAPPL's existing unlock/wait/recheck style rather than introducing another w
 
 A plain adapter mutex covers only cuts, so prints can overtake it. A loop around nonblocking OpenDevice has the same problem. A synthetic print job would create a job/document lifecycle for an action the existing architecture explicitly keeps independent of jobs. The narrow PAPPL change places ordering alongside the code that actually starts work.
 
+### Review recovery: preserve scheduling progress
+
+Implementation reviews 1 through 3 found successive ownership and scheduling defects; the latest review (`016-implementation-review.verdict.json`, commit `a4b52d3`) identifies two remaining deadlocks within the existing ordering contract. PAPPL scans active jobs newest first. Skip a streaming follower behind the cut boundary before considering whether its request already owns processing, so releasing an older PNG can still start that eligible work. Completion of a canceled stream that never owned the printer must also recheck scheduling after removing that job, while preserving another owner's printer state and device. Add controlled cases for these two reported interleavings in the existing driver harness; the ordinary successful follower case did not expose either failure.
+
 ### Preserve the operation's result
 
 The request stays open while waiting and reports the existing `pt_cut` outcome once executed. A failed transport open at its turn still returns `server-error-busy`; this change does not add retries for physical unavailability. Run state and live tape are evaluated when ownership is obtained, so earlier printing determines what the cut releases.
@@ -73,3 +77,5 @@ Removed repeated design statements about saved payloads/persistence and the exis
 | Task 1.1 | Ordering and contention clauses; a patch without adapter integration and concurrent assertions leaves the reported path unestablished. |
 | Task 1.2 | Existing operation and dependency documentation; implementation alone leaves contradictory client instructions. |
 | Task 2.1 | Repository core, adapter, both-model smoke, and OpenSpec gates; core-only checks cannot exercise the changed PAPPL scheduler. |
+
+Recovery cut pass: kept the two scan/completion corrections and task 1.3 because the latest review demonstrates deadlocks under the existing queued-ordering contract; a successful single-follower test cannot fail on those interleavings. No new spec sentence, queue option, ownership state, or separate test harness is added. Task 2.1 is reopened so integration checks cover the corrected implementation.
