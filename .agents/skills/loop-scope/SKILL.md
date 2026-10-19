@@ -1,6 +1,6 @@
 ---
-name: openspec-scope
-description: Prepare selected GitHub issues as individually committed OpenSpec proposals in an attended scoping worktree, then deliver them together. Use when the user asks to scope issues with the loop or invokes openspec-scope.
+name: loop-scope
+description: Prepare selected GitHub issues as individually committed OpenSpec proposals in an attended scoping worktree, then deliver them together. Use when the user asks to scope issues with the loop or invokes loop-scope.
 ---
 
 # Attend a scoping session
@@ -9,10 +9,10 @@ Prepare native OpenSpec proposals with the user. The deterministic commands crea
 
 ## Permissions and working directories
 
-- Read applicable repository instructions first, including their issue/Git workflow. Use the repository's native OpenSpec proposing skill or command rather than a replacement planner.
+- Read applicable repository instructions first, including their issue/Git workflow. Draft proposals with the `loop-propose` skill, which delegates to the repository's native OpenSpec proposing, rather than a replacement planner.
 - Run `loop scope start <session>` and `loop scope finish <session>` outside a sandbox that makes the shared Git directory read-only. Proposal staging and commits need the same Git-write permissions. In Codex, request escalated permissions for these commands, as the supervision skill does. A permission refusal does not justify authoring in the default checkout.
 - Remember the checkout where start was invoked. Both commands use the existing configuration merge order: invoking `openspec/loop.yaml`, shared main-checkout `openspec/loop.local.yaml`, then the invoking checkout's local overrides; finish from that same checkout unless the user deliberately chooses different settings. Shared main-checkout overrides are inherited when configuration is read; invoking overrides are not copied into the session.
-- Set the reported session worktree explicitly as the working directory for native proposing, all OpenSpec context/artifact commands and proposal commits. Run `openspec list --json` there and inspect its resolved root, then inspect native instructions' artifact paths before writing or staging. Require those paths to resolve inside the session worktree. If the project selects a store, follow native store selection; if its resolved root is outside the session worktree, stop and explain the conflict rather than write outside it or silently switch roots.
+- Set the reported session worktree explicitly as the working directory for `loop-propose`, all OpenSpec context/artifact commands and proposal commits. Run `openspec list --json` there and inspect its resolved root, then inspect native instructions' artifact paths before writing or staging. Require those paths to resolve inside the session worktree. If the project selects a store, follow native store selection; if its resolved root is outside the session worktree, stop and explain the conflict rather than write outside it or silently switch roots.
 
 ## Select and start
 
@@ -22,8 +22,8 @@ Prepare native OpenSpec proposals with the user. The deterministic commands crea
 
 ## Propose one selected issue at a time
 
-1. Read the selected issue, its comments and relevant project context. Invoke native OpenSpec proposing from the session worktree for one coherent implementable change. Verify its root and artifact paths as above.
-2. Native proposing returns to this scoping workflow for artifact review and commit. Show the artifacts and continue without requiring a new user request unless the user requested a review pause. Do not start implementation.
+1. Read the selected issue, its comments and relevant project context. Invoke `loop-propose` from the session worktree for one coherent implementable change. Verify its root and artifact paths as above.
+2. `loop-propose` returns to this scoping workflow for artifact review and commit. Show its summary and the artifacts and continue without requiring a new user request unless the user requested a review pause. Do not start implementation.
 3. Inspect the generated proposal, design, spec deltas and tasks. Ask about unresolved choices that materially affect behavior or scope and stop until answered. Use explicit defaults for routine choices, recording them as defaults in `design.md`; record the user's material decisions there as well. Do not silently choose behavior so later unattended implementation can proceed.
 4. Trim to one coherent change and record non-goals. Explicit invocation of this skill authorizes filing omitted requested work as follow-up GitHub issues. Follow the repository's issue conventions, check for an existing follow-up, and create only the necessary follow-ups. Each must link the source issue URL and name the OpenSpec change; link it from the proposal's non-goals. The proposal need not be published and no proposal URL is required. Use a structured body argument or a body file for multiline issue text. Do not file unrelated work or close the source issue.
 5. Record `Source issue: <URL>` in `proposal.md`. Once that proposal's artifacts are ready, inspect its diff and stage only `openspec/changes/<change>/` in the session worktree. Inspect the staged paths to avoid including another proposal or unrelated staged work, then commit that proposal separately, for example:
