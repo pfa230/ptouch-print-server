@@ -78,7 +78,7 @@ index 3fb7a2a..eadf92f 100644
 -    papplDeviceGetMetrics(printer->device, &metrics);
 -    papplLogJob(job, PAPPL_LOGLEVEL_DEBUG, "Device read metrics: %lu requests, %lu bytes, %lu msecs", (unsigned long)metrics.read_requests, (unsigned long)metrics.read_bytes, (unsigned long)metrics.read_msecs);
 -    papplLogJob(job, PAPPL_LOGLEVEL_DEBUG, "Device write metrics: %lu requests, %lu bytes, %lu msecs", (unsigned long)metrics.write_requests, (unsigned long)metrics.write_bytes, (unsigned long)metrics.write_msecs);
-+    if (!printer->device_in_use && printer->device)
++    if (!printer->processing_job && !printer->device_in_use && printer->device)
 +    {
 +      papplDeviceGetMetrics(printer->device, &metrics);
 +      papplLogJob(job, PAPPL_LOGLEVEL_DEBUG, "Device read metrics: %lu requests, %lu bytes, %lu msecs", (unsigned long)metrics.read_requests, (unsigned long)metrics.read_bytes, (unsigned long)metrics.read_msecs);
@@ -174,7 +174,7 @@ diff --git a/pappl/printer-accessors.c b/pappl/printer-accessors.c
 index 66958a2..bf2af13 100644
 --- a/pappl/printer-accessors.c
 +++ b/pappl/printer-accessors.c
-@@ -895,6 +895,65 @@ papplPrinterIterateCompletedJobs(
+@@ -895,6 +895,89 @@ papplPrinterIterateCompletedJobs(
  // function.
  //
  
@@ -237,10 +237,34 @@ index 66958a2..bf2af13 100644
 +}
 +
 +
++// '_papplJobIsStreaming()' - Is a job a streaming-raster job?
++//
++// Reports whether the direct streaming-raster entry has claimed this job, so a
++// test can cancel it before it owns the device.
++//
++
++bool					// O - `true` if streaming
++_papplJobIsStreaming(
++    pappl_job_t *job)			// I - Job
++{
++  bool	ret = false;		// Return value
++
++
++  if (job)
++  {
++    _papplRWLockRead(job);
++    ret = job->streaming;
++    _papplRWUnlock(job);
++  }
++
++  return (ret);
++}
++
++
  pappl_device_t *			// O - Device or `NULL` if not possible
  papplPrinterOpenDevice(
      pappl_printer_t *printer)		// I - Printer
-@@ -907,7 +966,8 @@ papplPrinterOpenDevice(
+@@ -907,7 +990,8 @@ papplPrinterOpenDevice(
  
    _papplRWLockWrite(printer);
  
@@ -250,7 +274,7 @@ index 66958a2..bf2af13 100644
    {
  //    papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Opening device for status/maintenance.");
  
-@@ -921,6 +981,93 @@ papplPrinterOpenDevice(
+@@ -921,6 +1005,93 @@ papplPrinterOpenDevice(
  }
  
  
@@ -433,10 +457,11 @@ index b7c3cda..9604f38 100644
    bool			hold_new_jobs;		// Hold new jobs
    int			max_active_jobs,	// Maximum number of active jobs to accept
  			max_completed_jobs,	// Maximum number of completed jobs to retain in history
-@@ -128,6 +135,8 @@ extern void		*_papplPrinterRunUSB(pappl_printer_t *printer) _PAPPL_PRIVATE;
+@@ -128,6 +135,9 @@ extern void		*_papplPrinterRunUSB(pappl_printer_t *printer) _PAPPL_PRIVATE;
  
  extern void		_papplPrinterCheckJobsNoLock(pappl_printer_t *printer) _PAPPL_PRIVATE;
  extern void		_papplPrinterCleanJobsNoLock(pappl_printer_t *printer) _PAPPL_PRIVATE;
++extern bool		_papplJobIsStreaming(pappl_job_t *job) _PAPPL_PRIVATE;
 +extern bool		_papplPrinterCutBarrierNoLock(pappl_printer_t *printer, pappl_job_t *job) _PAPPL_PRIVATE;
 +extern int		_papplPrinterWaitingAcquisitions(pappl_printer_t *printer) _PAPPL_PRIVATE;
  extern void		_papplPrinterCopyAttributesNoLock(pappl_printer_t *printer, pappl_client_t *client, cups_array_t *ra, const char *format) _PAPPL_PRIVATE;

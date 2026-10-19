@@ -60,6 +60,7 @@ static ipp_status_t send_cut(const char *host, pappl_printer_t *printer, ipp_t *
 /* PAPPL's queued-acquisition state, to confirm admission and waiting without a delay. */
 extern int _papplPrinterWaitingAcquisitions(pappl_printer_t *printer);
 extern bool _papplPrinterCutBarrierNoLock(pappl_printer_t *printer, pappl_job_t *job);
+extern bool _papplJobIsStreaming(pappl_job_t *job);
 static pappl_job_t *newest_active_job(pappl_printer_t *printer);
 
 /* The P710BT removes 14 feed dots from each logical page end before output. */
@@ -1316,6 +1317,38 @@ static void *submit_raster_thread(void *arg)
     return NULL;
 }
 
+/* A streaming Print-Job whose document body the test feeds through a pipe, so a
+ * canceled request can be held before its completion until the cut clears. */
+typedef struct { pappl_printer_t *printer; pappl_job_t *job; bool done;
+                 int body_read; } pipe_submit;
+static bool pipe_done(pipe_submit *s)
+{
+    pthread_mutex_lock(&request_lock); bool done = s->done; pthread_mutex_unlock(&request_lock);
+    return done;
+}
+static void *submit_raster_pipe_thread(void *arg)
+{
+    pipe_submit *s = arg;
+    char resource[128], uri[256];
+    snprintf(resource, sizeof resource, "/ipp/print/%s", papplPrinterGetName(s->printer));
+    snprintf(uri, sizeof uri, "ipp://localhost:%d%s", port, resource);
+    http_t *connection = httpConnect2("localhost", port, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 30000, NULL);
+    assert(connection);
+    ipp_t *request = ippNewRequest(IPP_OP_PRINT_JOB);
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "test");
+    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/pwg-raster");
+    ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
+    add_finishing(request, "none", false);
+    ipp_t *reply = cupsDoIORequest(connection, request, resource, s->body_read, -1);
+    close(s->body_read);
+    assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
+    s->job = papplPrinterFindJob(s->printer, ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0));
+    ippDelete(reply); httpClose(connection);
+    pthread_mutex_lock(&request_lock); s->done = true; pthread_mutex_unlock(&request_lock);
+    return NULL;
+}
+
 /* Raster pages on the wire in order: transmitted row count, any ink, and the
  * leftmost inked dot, which identifies each distinct image pattern. */
 typedef struct { size_t rows; bool ink; unsigned first_ink; } wire_page;
@@ -1555,36 +1588,56 @@ static void canceled_stream_behind_cut_case(pappl_printer_t *usb)
 
     pappl_job_t *p = upload_image(usb, "none", 1, false, NULL, 85, 40, 42);
     assert(papplJobRelease(p, "test"));
-    job_submit s = {.printer = usb};
-    pthread_t st; assert(!pthread_create(&st, NULL, submit_raster_thread, &s));
+
+    /* The streaming request's body stays in the test's pipe, so once canceled it
+     * cannot complete until the cut barrier has been removed. */
+    char path[] = "/tmp/ptouch-order-pipe-XXXXXX";
+    write_raster(path, 1, 1, CUPS_RASTER_WRITE_PWG, 0);
+    int body = open(path, O_RDONLY); unlink(path); assert(body >= 0);
+    unsigned char body_bytes[8192];
+    ssize_t body_len = read(body, body_bytes, sizeof body_bytes); assert(body_len > 0);
+    close(body);
+
+    int fds[2]; assert(!pipe(fds));
+    pipe_submit s = {.printer = usb, .body_read = fds[0]};
+    pthread_t st; assert(!pthread_create(&st, NULL, submit_raster_pipe_thread, &s));
     for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
         struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
     }
     assert(papplPrinterGetNumberOfActiveJobs(usb) >= 2);
     pappl_job_t *stream = newest_active_job(usb);
     assert(stream && papplJobGetID(stream) > papplJobGetID(p));
-    await_cut_barrier(usb, stream); /* The streaming request waits behind C1. */
-    assert(!cut_done(&c1) && !job_done(&s));
 
-    /* Fail the cut's open and the stream's own open, so C1's closure removes its
-     * barrier while the stream is still in start_job.  Canceling only after the
-     * cut has closed forces the PNG to wait for that request's completion. */
+    /* Cancel before the stream can own the device; its body is still unsent. */
+    for (int i = 0; i < 5000 && !_papplJobIsStreaming(stream); i++) {
+        struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
+    }
+    assert(_papplJobIsStreaming(stream));
+    papplJobCancel(stream);
+    assert(papplJobIsCanceled(stream));
+    assert(!cut_done(&c1) && !pipe_done(&s));
+
+    /* Fail the cut's open so its closure removes the barrier while the canceled
+     * streaming request is still active; the closure must skip that follower. */
     pt_printer_state *state = pt_state(usb);
     int saved_poll = state->idle_poll_seconds;
     state->idle_poll_seconds = 0; /* No idle probe may consume the failed open. */
     fail_next_open = true;
-    can_open = false;
     papplPrinterCloseDevice(usb);
     pthread_join(t1, NULL);
     assert(cut_status(&c1) == IPP_STATUS_ERROR_BUSY);
-    papplJobCancel(stream);
-    can_open = true;
     state->idle_poll_seconds = saved_poll;
 
+    /* The cut closure stopped at the streaming follower, so the PNG still waits;
+     * only the follower's unowned completion can resume it. */
+    assert(!pipe_done(&s) && papplJobGetState(p) == IPP_JSTATE_PENDING);
+
+    assert(write(fds[1], body_bytes, (size_t)body_len) == body_len);
+    close(fds[1]);
     await_terminal(p);
     assert(papplJobGetState(p) == IPP_JSTATE_COMPLETED);
     pthread_join(st, NULL);
-    assert(job_done(&s) && s.job && papplJobGetState(s.job) == IPP_JSTATE_CANCELED);
+    assert(pipe_done(&s) && s.job && papplJobGetState(s.job) == IPP_JSTATE_CANCELED);
 
     wire_page pages[16];
     size_t count = wire_pages(pages, 16);
