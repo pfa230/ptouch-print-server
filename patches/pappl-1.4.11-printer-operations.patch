@@ -1,5 +1,5 @@
 diff --git a/pappl/job-process.c b/pappl/job-process.c
-index 3fb7a2a..7a7a95d 100644
+index 3fb7a2a..eadf92f 100644
 --- a/pappl/job-process.c
 +++ b/pappl/job-process.c
 @@ -1125,6 +1125,7 @@ finish_job(pappl_job_t  *job)		// I - Job
@@ -101,7 +101,7 @@ index 3fb7a2a..7a7a95d 100644
    if (papplPrinterGetNumberOfActiveJobs(printer) > 0)
    {
      _papplRWLockWrite(printer);
-@@ -1241,6 +1255,29 @@ start_job(pappl_job_t *job)		// I - Job
+@@ -1241,6 +1255,32 @@ start_job(pappl_job_t *job)		// I - Job
    _papplRWLockWrite(printer);
    _papplRWLockWrite(job);
  
@@ -119,9 +119,12 @@ index 3fb7a2a..7a7a95d 100644
 +    _papplRWLockWrite(job);
 +  }
 +
-+  // A cancellation while waiting must not be overwritten by the processing
-+  // state, and must not reach device acquisition or output.
-+  if (job->is_canceled || job->state >= IPP_JSTATE_CANCELED)
++  // A cancellation, printer deletion, or system shutdown while waiting must not
++  // be overwritten by the processing state, must not reach device acquisition
++  // or output, and must not disturb another owner's device or printer state.
++  if (job->is_canceled || job->state >= IPP_JSTATE_CANCELED ||
++      printer->is_deleted || !papplSystemIsRunning(printer->system) ||
++      printer->processing_job)
 +  {
 +    _papplRWUnlock(job);
 +    _papplRWUnlock(printer);
@@ -168,10 +171,10 @@ index 3141759..a1257e7 100644
  
        if (pthread_create(&t, NULL, (void *(*)(void *))_papplJobProcess, job))
 diff --git a/pappl/printer-accessors.c b/pappl/printer-accessors.c
-index 66958a2..c570c85 100644
+index 66958a2..bf2af13 100644
 --- a/pappl/printer-accessors.c
 +++ b/pappl/printer-accessors.c
-@@ -895,6 +895,40 @@ papplPrinterIterateCompletedJobs(
+@@ -895,6 +895,65 @@ papplPrinterIterateCompletedJobs(
  // function.
  //
  
@@ -209,10 +212,35 @@ index 66958a2..c570c85 100644
 +}
 +
 +
++// '_papplPrinterWaitingAcquisitions()' - Count queued device acquisitions.
++//
++// Confirms that a request has entered a printer's queued acquisition before
++// later work is accepted, so ordering can be demonstrated without a delay.
++
++int					// O - Number of waiting acquisitions
++_papplPrinterWaitingAcquisitions(
++    pappl_printer_t *printer)		// I - Printer
++{
++  int		count = 0;		// Number of waiting acquisitions
++  pappl_waiter_t *waiter;		// Current waiting acquisition
++
++
++  if (!printer)
++    return (0);
++
++  _papplRWLockRead(printer);
++  for (waiter = printer->waiters; waiter; waiter = waiter->next)
++    count ++;
++  _papplRWUnlock(printer);
++
++  return (count);
++}
++
++
  pappl_device_t *			// O - Device or `NULL` if not possible
  papplPrinterOpenDevice(
      pappl_printer_t *printer)		// I - Printer
-@@ -907,7 +941,8 @@ papplPrinterOpenDevice(
+@@ -907,7 +966,8 @@ papplPrinterOpenDevice(
  
    _papplRWLockWrite(printer);
  
@@ -222,7 +250,7 @@ index 66958a2..c570c85 100644
    {
  //    papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Opening device for status/maintenance.");
  
-@@ -921,6 +956,93 @@ papplPrinterOpenDevice(
+@@ -921,6 +981,93 @@ papplPrinterOpenDevice(
  }
  
  
@@ -381,7 +409,7 @@ index e99261d..57b374e 100644
  // '_papplPrinterProcessIPP()' - Process an IPP Printer request.
  //
 diff --git a/pappl/printer-private.h b/pappl/printer-private.h
-index b7c3cda..9db654c 100644
+index b7c3cda..9604f38 100644
 --- a/pappl/printer-private.h
 +++ b/pappl/printer-private.h
 @@ -41,6 +41,12 @@
@@ -405,11 +433,12 @@ index b7c3cda..9db654c 100644
    bool			hold_new_jobs;		// Hold new jobs
    int			max_active_jobs,	// Maximum number of active jobs to accept
  			max_completed_jobs,	// Maximum number of completed jobs to retain in history
-@@ -128,6 +135,7 @@ extern void		*_papplPrinterRunUSB(pappl_printer_t *printer) _PAPPL_PRIVATE;
+@@ -128,6 +135,8 @@ extern void		*_papplPrinterRunUSB(pappl_printer_t *printer) _PAPPL_PRIVATE;
  
  extern void		_papplPrinterCheckJobsNoLock(pappl_printer_t *printer) _PAPPL_PRIVATE;
  extern void		_papplPrinterCleanJobsNoLock(pappl_printer_t *printer) _PAPPL_PRIVATE;
 +extern bool		_papplPrinterCutBarrierNoLock(pappl_printer_t *printer, pappl_job_t *job) _PAPPL_PRIVATE;
++extern int		_papplPrinterWaitingAcquisitions(pappl_printer_t *printer) _PAPPL_PRIVATE;
  extern void		_papplPrinterCopyAttributesNoLock(pappl_printer_t *printer, pappl_client_t *client, cups_array_t *ra, const char *format) _PAPPL_PRIVATE;
  extern void		_papplPrinterCopyStateNoLock(pappl_printer_t *printer, ipp_tag_t group_tag, ipp_t *ipp, pappl_client_t *client, cups_array_t *ra) _PAPPL_PRIVATE;
  extern void		_papplPrinterCopyXRINoLock(pappl_printer_t *printer, ipp_t *ipp, pappl_client_t *client) _PAPPL_PRIVATE;

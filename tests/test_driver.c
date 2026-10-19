@@ -57,6 +57,11 @@ static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
 static ipp_status_t cut(pappl_printer_t *printer);
 static ipp_status_t send_cut(const char *host, pappl_printer_t *printer, ipp_t *request, const char *file);
 
+/* PAPPL's queued-acquisition state, to confirm admission and waiting without a delay. */
+extern int _papplPrinterWaitingAcquisitions(pappl_printer_t *printer);
+extern bool _papplPrinterCutBarrierNoLock(pappl_printer_t *printer, pappl_job_t *job);
+static pappl_job_t *newest_active_job(pappl_printer_t *printer);
+
 /* The P710BT removes 14 feed dots from each logical page end before output. */
 static bool is_p710bt(void) { return selected_model && selected_model->pid == 0x20af; }
 static unsigned tx(unsigned logical) { return logical - (is_p710bt() ? 2u * PT_END_MARGIN_PX : 0u); }
@@ -1237,11 +1242,10 @@ static void repeat_status(void)
 }
 
 /* One Ptouch-Cut request on its own connection thread. */
-typedef struct { pappl_printer_t *printer; ipp_status_t status; bool started, done; } cut_request;
+typedef struct { pappl_printer_t *printer; ipp_status_t status; bool done; } cut_request;
 static void *cut_request_thread(void *arg)
 {
     cut_request *r = arg;
-    pthread_mutex_lock(&request_lock); r->started = true; pthread_mutex_unlock(&request_lock);
     ipp_status_t status = cut(r->printer);
     pthread_mutex_lock(&request_lock); r->status = status; r->done = true; pthread_mutex_unlock(&request_lock);
     return NULL;
@@ -1260,21 +1264,29 @@ static void start_cut(cut_request *r, pthread_t *thread, pappl_printer_t *printe
 {
     memset(r, 0, sizeof *r); r->printer = printer;
     assert(!pthread_create(thread, NULL, cut_request_thread, r));
-    bool started = false;
-    for (int i = 0; i < 2000 && !started; i++) {
-        pthread_mutex_lock(&request_lock); started = r->started; pthread_mutex_unlock(&request_lock);
-        if (!started) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
+}
+/* Wait until `minimum` cut requests have entered PAPPL's queued acquisition, so
+ * later work is accepted after them rather than racing their admission. */
+static void await_cut_admission(pappl_printer_t *printer, int minimum)
+{
+    for (int i = 0; i < 5000; i++) {
+        if (_papplPrinterWaitingAcquisitions(printer) >= minimum) return;
+        struct timespec delay = {0, 1000000L}; nanosleep(&delay, NULL);
     }
-    assert(started);
+    assert(!"Ptouch-Cut request was not admitted");
+}
+/* Wait until `job` is held behind the oldest queued cut instead of starting. */
+static void await_cut_barrier(pappl_printer_t *printer, pappl_job_t *job)
+{
+    for (int i = 0; i < 5000; i++) {
+        if (_papplPrinterCutBarrierNoLock(printer, job)) return;
+        struct timespec delay = {0, 1000000L}; nanosleep(&delay, NULL);
+    }
+    assert(!"streaming job did not wait behind the queued cut");
 }
 
 /* One raster Print-Job submitted from its own thread (direct start_job path). */
-typedef struct { pappl_printer_t *printer; pappl_job_t *job; bool started, done; } job_submit;
-static bool job_started(job_submit *s)
-{
-    pthread_mutex_lock(&request_lock); bool started = s->started; pthread_mutex_unlock(&request_lock);
-    return started;
-}
+typedef struct { pappl_printer_t *printer; pappl_job_t *job; bool done; } job_submit;
 static bool job_done(job_submit *s)
 {
     pthread_mutex_lock(&request_lock); bool done = s->done; pthread_mutex_unlock(&request_lock);
@@ -1296,7 +1308,6 @@ static void *submit_raster_thread(void *arg)
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/pwg-raster");
     ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
     add_finishing(request, "none", false);
-    pthread_mutex_lock(&request_lock); s->started = true; pthread_mutex_unlock(&request_lock);
     ipp_t *reply = cupsDoFileRequest(connection, request, resource, path); unlink(path);
     assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
     s->job = papplPrinterFindJob(s->printer, ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0));
@@ -1305,24 +1316,33 @@ static void *submit_raster_thread(void *arg)
     return NULL;
 }
 
-/* Raster pages on the wire in order: transmitted row count and any ink. */
-typedef struct { size_t rows; bool ink; } wire_page;
+/* Raster pages on the wire in order: transmitted row count, any ink, and the
+ * leftmost inked dot, which identifies each distinct image pattern. */
+typedef struct { size_t rows; bool ink; unsigned first_ink; } wire_page;
 static size_t wire_pages(wire_page *pages, size_t max)
 {
-    size_t n = 0, rows = 0; bool ink = false, active = false;
+    size_t n = 0, rows = 0; bool ink = false, active = false; unsigned first = 128;
     for (size_t pos = 0; pos < wire_used;) {
         size_t size = command_size(pos);
         if (wire[pos] == 27 && wire[pos + 1] == 'i' && (wire[pos + 2] == 'c' || wire[pos + 2] == 'z')) {
-            if (active && n < max) { pages[n].rows = rows; pages[n].ink = ink; n++; }
-            active = true; rows = 0; ink = false;
+            if (active && n < max) { pages[n] = (wire_page){rows, ink, first}; n++; }
+            active = true; rows = 0; ink = false; first = 128;
         } else if (wire[pos] == 'G' && active) {
             rows++;
             const unsigned char *packed = wire + pos + (is_p710bt() ? 4 : 3);
-            for (int b = 0; b < 16; b++) ink |= packed[b] != 0;
+            for (int b = 0; b < 16; b++) {
+                if (!packed[b]) continue;
+                ink = true;
+                for (int bit = 0; bit < 8; bit++)
+                    if (packed[b] & (1u << bit)) {
+                        unsigned x = (unsigned)(15 - b) * 8 + (unsigned)bit;
+                        if (x < first) first = x;
+                    }
+            }
         }
         pos += size;
     }
-    if (active && n < max) { pages[n].rows = rows; pages[n].ink = ink; n++; }
+    if (active && n < max) { pages[n] = (wire_page){rows, ink, first}; n++; }
     return n;
 }
 
@@ -1347,12 +1367,12 @@ static void queue_order_case(pappl_printer_t *usb)
 
     cut_request c1, c2; pthread_t t1, t2;
     start_cut(&c1, &t1, usb);
-    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    await_cut_admission(usb, 1); /* C1 is queued before later work is accepted. */
     assert(!cut_done(&c1));
     pappl_job_t *d = upload_image(usb, "none", 1, false, NULL, 85, 48, 50);
     assert(papplJobRelease(d, "test"));
     start_cut(&c2, &t2, usb);
-    nanosleep(&settle, NULL);
+    await_cut_admission(usb, 2);
     pappl_job_t *e = upload_image(usb, "none", 1, false, NULL, 85, 52, 54);
     assert(papplJobRelease(e, "test"));
     assert(!cut_done(&c1) && !cut_done(&c2)); /* A response follows its execution. */
@@ -1372,6 +1392,10 @@ static void queue_order_case(pappl_printer_t *usb)
     assert(pages[2].rows == 1 && pages[4].rows == 1);
     assert(pages[0].ink && pages[1].ink && pages[3].ink && pages[5].ink);
     assert(!pages[2].ink && !pages[4].ink);
+    /* Distinct ink columns pin each image: A, B before C1; D between cuts; E after. */
+    assert(pages[0].first_ink < pages[1].first_ink);
+    assert(pages[1].first_ink < pages[3].first_ink);
+    assert(pages[3].first_ink < pages[5].first_ink);
     status_repeat = false;
     pt_run_set(usb, PT_RUN_CLOSED);
 }
@@ -1390,11 +1414,13 @@ static void streaming_follower_case(pappl_printer_t *usb)
     assert(papplPrinterOpenDevice(usb));
     cut_request c1; pthread_t t1;
     start_cut(&c1, &t1, usb);
-    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    await_cut_admission(usb, 1);
     job_submit follower = {.printer = usb};
     pthread_t ft; assert(!pthread_create(&ft, NULL, submit_raster_thread, &follower));
-    for (int i = 0; i < 2000 && !job_started(&follower); i++) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
-    nanosleep(&settle, NULL);
+    for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 1; i++) {
+        struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
+    }
+    await_cut_barrier(usb, newest_active_job(usb)); /* Follower entered its wait. */
     assert(!cut_done(&c1) && !job_done(&follower));
 
     papplPrinterCloseDevice(usb);
@@ -1437,7 +1463,7 @@ static void status_poll_wait_case(pappl_printer_t *usb)
     reset_wire();
     cut_request c1; pthread_t t1;
     start_cut(&c1, &t1, usb);
-    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    await_cut_admission(usb, 1); /* The cut is queued behind the status poll. */
     assert(!cut_done(&c1));
 
     pthread_mutex_lock(&pause_lock);
@@ -1479,7 +1505,7 @@ static void held_png_before_streaming_case(pappl_printer_t *usb)
     pappl_job_t *b = upload_image(usb, "none", 1, false, NULL, 85, 40, 42);
     cut_request c1; pthread_t t1;
     start_cut(&c1, &t1, usb);
-    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    await_cut_admission(usb, 1);
     assert(!cut_done(&c1));
 
     job_submit s = {.printer = usb};
@@ -1487,8 +1513,8 @@ static void held_png_before_streaming_case(pappl_printer_t *usb)
     for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
         struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
     }
-    nanosleep(&settle, NULL);
     assert(papplPrinterGetNumberOfActiveJobs(usb) >= 2); /* held B and streaming S */
+    await_cut_barrier(usb, newest_active_job(usb)); /* Streaming S waits behind C1. */
     assert(!cut_done(&c1) && !job_done(&s));
 
     /* Releasing B must start it even though S leads the active-job scan. */
@@ -1524,7 +1550,7 @@ static void canceled_stream_behind_cut_case(pappl_printer_t *usb)
     assert(papplPrinterOpenDevice(usb));
     cut_request c1; pthread_t t1;
     start_cut(&c1, &t1, usb);
-    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    await_cut_admission(usb, 1);
     assert(!cut_done(&c1));
 
     pappl_job_t *p = upload_image(usb, "none", 1, false, NULL, 85, 40, 42);
@@ -1534,24 +1560,27 @@ static void canceled_stream_behind_cut_case(pappl_printer_t *usb)
     for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
         struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
     }
-    nanosleep(&settle, NULL);
     assert(papplPrinterGetNumberOfActiveJobs(usb) >= 2);
     pappl_job_t *stream = newest_active_job(usb);
     assert(stream && papplJobGetID(stream) > papplJobGetID(p));
+    await_cut_barrier(usb, stream); /* The streaming request waits behind C1. */
     assert(!cut_done(&c1) && !job_done(&s));
 
-    /* Cancel the waiting stream, then force the cut's device open to fail once
-     * so its closure removes the barrier while the canceled request is active. */
+    /* Fail the cut's open and the stream's own open, so C1's closure removes its
+     * barrier while the stream is still in start_job.  Canceling only after the
+     * cut has closed forces the PNG to wait for that request's completion. */
     pt_printer_state *state = pt_state(usb);
     int saved_poll = state->idle_poll_seconds;
     state->idle_poll_seconds = 0; /* No idle probe may consume the failed open. */
     fail_next_open = true;
-    papplJobCancel(stream);
+    can_open = false;
     papplPrinterCloseDevice(usb);
     pthread_join(t1, NULL);
+    assert(cut_status(&c1) == IPP_STATUS_ERROR_BUSY);
+    papplJobCancel(stream);
+    can_open = true;
     state->idle_poll_seconds = saved_poll;
 
-    assert(cut_status(&c1) == IPP_STATUS_ERROR_BUSY);
     await_terminal(p);
     assert(papplJobGetState(p) == IPP_JSTATE_COMPLETED);
     pthread_join(st, NULL);
