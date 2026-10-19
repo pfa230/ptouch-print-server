@@ -24,3 +24,5 @@ None. This repairs verification of the existing queued-cut contract; skip_specs 
 ## Impact
 
 Only the canceled-stream test fixture and its supporting helper in tests/test_driver.c are in scope. The queued-cut implementation and accepted specifications are unchanged. Delivery updates the existing issue-65-queue-cut branch and PR #66.
+
+This repair builds on the existing queued-cut implementation at `ed1a03d` (PR #66). Implementation review must compare against that commit (`git diff ed1a03d HEAD`). The loop-derived `merge-base(HEAD, origin/main)` is currently `1c1ccca`, which also includes the unlanded queued-cut predecessor in the review range; those predecessor changes are outside this repair's scope.
