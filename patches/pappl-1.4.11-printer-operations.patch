@@ -1,8 +1,77 @@
 diff --git a/pappl/job-process.c b/pappl/job-process.c
-index 3fb7a2a..491feac 100644
+index 3fb7a2a..9006ba7 100644
 --- a/pappl/job-process.c
 +++ b/pappl/job-process.c
-@@ -1203,14 +1203,17 @@ finish_job(pappl_job_t  *job)		// I - Job
+@@ -1125,6 +1125,7 @@ finish_job(pappl_job_t  *job)		// I - Job
+ {
+   pappl_printer_t *printer = job->printer;
+ 					// Printer
++  bool		owned;			// Did this job own the device?
+   static const char * const job_states[] =
+   {
+     "Pending",
+@@ -1140,6 +1141,10 @@ finish_job(pappl_job_t  *job)		// I - Job
+   _papplRWLockWrite(printer);
+   _papplRWLockWrite(job);
+ 
++  // A request canceled before it acquired the device still has to complete,
++  // but it must not clear another job's ownership or reset its printer state.
++  owned = printer->processing_job == job;
++
+   if (job->is_canceled)
+     job->state = IPP_JSTATE_CANCELED;
+   else if (job->state == IPP_JSTATE_PROCESSING)
+@@ -1152,26 +1157,30 @@ finish_job(pappl_job_t  *job)		// I - Job
+ 
+   _papplJobSetRetain(job);
+ 
+-  printer->processing_job = NULL;
++  if (owned)
++    printer->processing_job = NULL;
+ 
+   if (job->state >= IPP_JSTATE_CANCELED && !printer->max_preserved_jobs && !job->retain_until)
+     _papplJobRemoveFile(job);
+ 
+   _papplSystemAddEventNoLock(job->system, job->printer, job, PAPPL_EVENT_JOB_COMPLETED, NULL);
+ 
+-  if (printer->is_stopped)
+-  {
+-    // New printer-state is 'stopped'...
+-    printer->state      = IPP_PSTATE_STOPPED;
+-    printer->is_stopped = false;
+-  }
+-  else
++  if (owned)
+   {
+-    // New printer-state is 'idle'...
+-    printer->state = IPP_PSTATE_IDLE;
+-  }
++    if (printer->is_stopped)
++    {
++      // New printer-state is 'stopped'...
++      printer->state      = IPP_PSTATE_STOPPED;
++      printer->is_stopped = false;
++    }
++    else
++    {
++      // New printer-state is 'idle'...
++      printer->state = IPP_PSTATE_IDLE;
++    }
+ 
+-  printer->state_time = time(NULL);
++    printer->state_time = time(NULL);
++  }
+ 
+   cupsArrayRemove(printer->active_jobs, job);
+   cupsArrayAdd(printer->completed_jobs, job);
+@@ -1197,25 +1206,28 @@ finish_job(pappl_job_t  *job)		// I - Job
+     papplPrinterDelete(printer);
+     return;
+   }
+-  else if (!strncmp(printer->device_uri, "file:", 5) || cupsArrayGetCount(printer->active_jobs) == 0)
++  else if (owned && (!strncmp(printer->device_uri, "file:", 5) || cupsArrayGetCount(printer->active_jobs) == 0))
+   {
+     pappl_devmetrics_t	metrics;	// Metrics for device IO
  
      _papplRWLockWrite(printer);
  
@@ -26,12 +95,22 @@ index 3fb7a2a..491feac 100644
  
      _papplRWUnlock(printer);
    }
-@@ -1241,6 +1244,25 @@ start_job(pappl_job_t *job)		// I - Job
+ 
+-  if (papplPrinterGetNumberOfActiveJobs(printer) > 0)
++  if (owned && papplPrinterGetNumberOfActiveJobs(printer) > 0)
+   {
+     _papplRWLockWrite(printer);
+     _papplPrinterCheckJobsNoLock(printer);
+@@ -1241,6 +1253,29 @@ start_job(pappl_job_t *job)		// I - Job
    _papplRWLockWrite(printer);
    _papplRWLockWrite(job);
  
-+  // Wait for any cut accepted before this job to run first...
-+  while (_papplPrinterCutBarrierNoLock(printer, job) && !printer->is_deleted && !job->is_canceled && job->state < IPP_JSTATE_CANCELED && papplSystemIsRunning(printer->system))
++  // Wait for any cut accepted before this job to run first, and for exclusive
++  // ownership: a later start must not overwrite the job already processing or
++  // print through a device a cut has acquired.
++  while (!printer->is_deleted && !job->is_canceled && job->state < IPP_JSTATE_CANCELED &&
++         papplSystemIsRunning(printer->system) &&
++         (printer->processing_job || _papplPrinterCutBarrierNoLock(printer, job)))
 +  {
 +    _papplRWUnlock(job);
 +    _papplRWUnlock(printer);

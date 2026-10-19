@@ -52,6 +52,8 @@ static pthread_mutex_t pause_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pause_cond = PTHREAD_COND_INITIALIZER;
 /* Serialize the shared status-message buffer for concurrent cut requests. */
 static pthread_mutex_t cut_message_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Serialize request-thread progress read by the controlling test thread. */
+static pthread_mutex_t request_lock = PTHREAD_MUTEX_INITIALIZER;
 static ipp_status_t cut(pappl_printer_t *printer);
 static ipp_status_t send_cut(const char *host, pappl_printer_t *printer, ipp_t *request, const char *file);
 
@@ -1235,21 +1237,45 @@ typedef struct { pappl_printer_t *printer; ipp_status_t status; bool started, do
 static void *cut_request_thread(void *arg)
 {
     cut_request *r = arg;
-    r->started = true;
-    r->status = cut(r->printer);
-    r->done = true;
+    pthread_mutex_lock(&request_lock); r->started = true; pthread_mutex_unlock(&request_lock);
+    ipp_status_t status = cut(r->printer);
+    pthread_mutex_lock(&request_lock); r->status = status; r->done = true; pthread_mutex_unlock(&request_lock);
     return NULL;
+}
+static bool cut_done(cut_request *r)
+{
+    pthread_mutex_lock(&request_lock); bool done = r->done; pthread_mutex_unlock(&request_lock);
+    return done;
+}
+static ipp_status_t cut_status(cut_request *r)
+{
+    pthread_mutex_lock(&request_lock); ipp_status_t status = r->status; pthread_mutex_unlock(&request_lock);
+    return status;
 }
 static void start_cut(cut_request *r, pthread_t *thread, pappl_printer_t *printer)
 {
     memset(r, 0, sizeof *r); r->printer = printer;
     assert(!pthread_create(thread, NULL, cut_request_thread, r));
-    for (int i = 0; i < 2000 && !r->started; i++) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
-    assert(r->started);
+    bool started = false;
+    for (int i = 0; i < 2000 && !started; i++) {
+        pthread_mutex_lock(&request_lock); started = r->started; pthread_mutex_unlock(&request_lock);
+        if (!started) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
+    }
+    assert(started);
 }
 
 /* One raster Print-Job submitted from its own thread (direct start_job path). */
 typedef struct { pappl_printer_t *printer; pappl_job_t *job; bool started, done; } job_submit;
+static bool job_started(job_submit *s)
+{
+    pthread_mutex_lock(&request_lock); bool started = s->started; pthread_mutex_unlock(&request_lock);
+    return started;
+}
+static bool job_done(job_submit *s)
+{
+    pthread_mutex_lock(&request_lock); bool done = s->done; pthread_mutex_unlock(&request_lock);
+    return done;
+}
 static void *submit_raster_thread(void *arg)
 {
     job_submit *s = arg;
@@ -1266,12 +1292,12 @@ static void *submit_raster_thread(void *arg)
     ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_MIMETYPE, "document-format", NULL, "image/pwg-raster");
     ippAddInteger(request, IPP_TAG_JOB, IPP_TAG_INTEGER, "copies", 1);
     add_finishing(request, "none", false);
-    s->started = true;
+    pthread_mutex_lock(&request_lock); s->started = true; pthread_mutex_unlock(&request_lock);
     ipp_t *reply = cupsDoFileRequest(connection, request, resource, path); unlink(path);
     assert(reply && ippGetStatusCode(reply) <= IPP_STATUS_OK_EVENTS_COMPLETE);
     s->job = papplPrinterFindJob(s->printer, ippGetInteger(ippFindAttribute(reply, "job-id", IPP_TAG_INTEGER), 0));
     ippDelete(reply); httpClose(connection);
-    s->done = true;
+    pthread_mutex_lock(&request_lock); s->done = true; pthread_mutex_unlock(&request_lock);
     return NULL;
 }
 
@@ -1318,18 +1344,18 @@ static void queue_order_case(pappl_printer_t *usb)
     cut_request c1, c2; pthread_t t1, t2;
     start_cut(&c1, &t1, usb);
     struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
-    assert(!c1.done);
+    assert(!cut_done(&c1));
     pappl_job_t *d = upload_image(usb, "none", 1, false, NULL, 85, 48, 50);
     assert(papplJobRelease(d, "test"));
     start_cut(&c2, &t2, usb);
     nanosleep(&settle, NULL);
     pappl_job_t *e = upload_image(usb, "none", 1, false, NULL, 85, 52, 54);
     assert(papplJobRelease(e, "test"));
-    assert(!c1.done && !c2.done); /* A response follows its execution. */
+    assert(!cut_done(&c1) && !cut_done(&c2)); /* A response follows its execution. */
 
     release_raster_pause();
     pthread_join(t1, NULL); pthread_join(t2, NULL);
-    assert(c1.status == IPP_STATUS_OK && c2.status == IPP_STATUS_OK);
+    assert(cut_status(&c1) == IPP_STATUS_OK && cut_status(&c2) == IPP_STATUS_OK);
     await_terminal(a); await_terminal(b); await_terminal(d); await_terminal(e);
     assert(papplJobGetState(a) == IPP_JSTATE_COMPLETED && papplJobGetState(b) == IPP_JSTATE_COMPLETED);
     assert(papplJobGetState(d) == IPP_JSTATE_COMPLETED && papplJobGetState(e) == IPP_JSTATE_COMPLETED);
@@ -1363,13 +1389,13 @@ static void streaming_follower_case(pappl_printer_t *usb)
     struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
     job_submit follower = {.printer = usb};
     pthread_t ft; assert(!pthread_create(&ft, NULL, submit_raster_thread, &follower));
-    for (int i = 0; i < 2000 && !follower.started; i++) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
+    for (int i = 0; i < 2000 && !job_started(&follower); i++) { struct timespec d = {0, 1000000L}; nanosleep(&d, NULL); }
     nanosleep(&settle, NULL);
-    assert(!c1.done && !follower.done);
+    assert(!cut_done(&c1) && !job_done(&follower));
 
     papplPrinterCloseDevice(usb);
     pthread_join(t1, NULL); pthread_join(ft, NULL);
-    assert(c1.status == IPP_STATUS_OK && follower.done);
+    assert(cut_status(&c1) == IPP_STATUS_OK && job_done(&follower));
     assert(follower.job && papplJobGetState(follower.job) == IPP_JSTATE_COMPLETED);
 
     wire_page pages[16];
@@ -1408,13 +1434,13 @@ static void status_poll_wait_case(pappl_printer_t *usb)
     cut_request c1; pthread_t t1;
     start_cut(&c1, &t1, usb);
     struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
-    assert(!c1.done);
+    assert(!cut_done(&c1));
 
     pthread_mutex_lock(&pause_lock);
     status_read_go = true; pthread_cond_broadcast(&pause_cond);
     pthread_mutex_unlock(&pause_lock);
     pthread_join(poll, NULL); pthread_join(t1, NULL);
-    assert(c1.status == IPP_STATUS_OK);
+    assert(cut_status(&c1) == IPP_STATUS_OK);
     expect_cut_wire(true, 12);
     status_repeat = false;
     pt_run_set(usb, PT_RUN_CLOSED);
