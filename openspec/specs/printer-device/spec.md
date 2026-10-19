@@ -216,11 +216,15 @@ PT-P710BT queues SHALL advertise and accept project-local Ptouch-Cut (0x5f01) us
 
 ### Requirement: Direct cuts use exclusive device access
 
-The action SHALL execute synchronously through the configured transport under exclusive device ownership. Failed acquisition, whether busy or unavailable, SHALL return server-error-busy without deferred execution. CLOSED or healthy blank-only runs SHALL succeed without feed/cut output once owned. Uncertain output SHALL be refused. Faulted or unusable live status on an acquired device SHALL return server-error-device-error.
+The action SHALL execute synchronously through the configured transport under exclusive device ownership. An authorized cut SHALL take its place behind already accepted print jobs and cuts, ahead of later accepted print jobs and cuts. It SHALL wait through ownership contention, including status polling, rather than return server-error-busy. CLOSED or healthy blank-only runs SHALL succeed without feed/cut output once owned. Uncertain output SHALL be refused. Faulted or unusable live status on an acquired device SHALL return server-error-device-error.
 
 #### Scenario: Printing or maintenance owns the device
-- **WHEN** a cut cannot obtain ownership because printing, polling or another cut owns the device
-- **THEN** it returns server-error-busy without adding a job or sending page output, and no action runs later on its behalf
+- **WHEN** prints A and B are accepted, cut C1 is admitted while A is still printing, print D is accepted, cut C2 is admitted, and print E is accepted
+- **THEN** A and B finish before C1 executes, D prints between C1 and C2, and E prints after C2, with each cut response waiting for its own execution result
+
+#### Scenario: Status polling owns the device
+- **WHEN** a cut arrives while a status poll owns the device
+- **THEN** it waits for that poll to release ownership and then executes without returning a contention error
 
 #### Scenario: Repeated request after success
 - **WHEN** only the healthy blank continuation remains after a successful release, or the run is known closed
