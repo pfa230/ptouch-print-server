@@ -1599,6 +1599,12 @@ static void canceled_stream_behind_cut_case(pappl_printer_t *usb)
     close(body);
 
     int fds[2]; assert(!pipe(fds));
+    /* CUPS buffers request data below HTTP_MAX_BUFFER, so a prefix of that size
+     * makes it flush a document chunk PAPPL can admit and stream the job on; the
+     * raster body stays in the pipe until the canceled request may finish. */
+    unsigned char prefix[HTTP_MAX_BUFFER];
+    memset(prefix, 0, sizeof prefix);
+    assert(write(fds[1], prefix, sizeof prefix) == (ssize_t)sizeof prefix);
     pipe_submit s = {.printer = usb, .body_read = fds[0]};
     pthread_t st; assert(!pthread_create(&st, NULL, submit_raster_pipe_thread, &s));
     for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
