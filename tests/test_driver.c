@@ -25,7 +25,7 @@ static size_t wire_used, status_used, status_size, status_chunk = 32;
 /* Input already on the connection is readable only up to status_release. It
  * starts at status_stale and advances by one reply run when a request write
  * (ESC i S) or a finishing write (FF/EJECT) makes the next reply available. */
-static size_t status_release, status_cursor, status_stale;
+static size_t status_release, status_stale;
 /* Reads at these offsets fail, or return nothing for status_gap_reads reads. */
 static size_t status_error_at = SIZE_MAX, status_gap_at = SIZE_MAX;
 static unsigned status_gap_reads;
@@ -114,12 +114,13 @@ static void status_gate(const unsigned char *p, size_t n)
     if (!request && !finish) return;
     pthread_mutex_lock(&fixture_lock);
     if (status_repeat) {
+        /* Each run restarts the repeating stream: a request exposes only the
+         * next snapshot, a finishing write the next readiness sequence, so a
+         * request never releases future readiness. */
         status_used = 0;
-        status_release = status_size;
-        status_cursor = status_size;
+        status_release = status_run_end(0, finish);
     } else {
-        status_release = status_run_end(status_cursor, finish);
-        status_cursor = status_release;
+        status_release = status_run_end(status_release, finish);
     }
     pthread_mutex_unlock(&fixture_lock);
 }
@@ -244,7 +245,7 @@ static void ready_status(int error, size_t chunk)
         if (i == 2) s[8] = (unsigned char)error;
     }
     status_used = 0; status_size = 96; status_chunk = chunk;
-    status_release = status_cursor = status_stale;
+    status_release = status_stale;
 }
 /* Queue one clean snapshot per tape, optionally followed by one print's ready phases. */
 static void queue_tapes(const int *tapes, size_t n, bool phases)
