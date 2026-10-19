@@ -24,4 +24,4 @@ None.
 
 ## Impact
 
-The PAPPL 1.4.11 printer-operation patch, its documentation, the adapter's acquisition call, and existing cut tests change. The same IPP operation, authorization, request attributes, synchronous completion response, and blank-continuation bytes remain in use. Labeler and its MCP adapter need no interface change. No implementation or live deployment is part of this proposal.
+The PAPPL 1.4.11 printer-operations patch, its documentation, the adapter's acquisition call, and existing cut tests change. The same IPP operation, authorization, request attributes, synchronous completion response, and blank-continuation bytes remain in use. Labeler and its MCP adapter need no interface change. No implementation or live deployment is part of this proposal.
