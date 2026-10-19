@@ -6,7 +6,7 @@
 - [x] 1.2 Update the README's cut instructions and `patches/README.md` for queued ordering, synchronous completion, and client timeout implications. Verify the documented result and unavailable-printer behavior agree with the delta and adapter tests, and document the patch's scope and removal condition.
 
 
-- [ ] 1.3 Resolve review 3's two scheduler-progress findings: skip streaming work behind a cut boundary before allowing its request-owned status to stop the active-job scan, and resume eligible scheduling when an unowned canceled stream finishes. Extend the existing driver harness with (a) an earlier held PNG released while a later streaming job waits behind its cut and (b) a pending PNG behind a cut whose closure encounters a canceled streaming request before that request finishes. Verify both cases reach terminal states without another client action, preserve exclusive ownership, and run the adapter tests with the existing ordinary-cut cases.
+- [x] 1.3 Resolve review 3's two scheduler-progress findings: skip streaming work behind a cut boundary before allowing its request-owned status to stop the active-job scan, and resume eligible scheduling when an unowned canceled stream finishes. Extend the existing driver harness with (a) an earlier held PNG released while a later streaming job waits behind its cut and (b) a pending PNG behind a cut whose closure encounters a canceled streaming request before that request finishes. Verify both cases reach terminal states without another client action, preserve exclusive ownership, and run the adapter tests with the existing ordinary-cut cases.
 
 ## 2. Integration checks
 

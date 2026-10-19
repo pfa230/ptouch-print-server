@@ -34,7 +34,7 @@ static bool counting;
 static const pt_dev *selected_model;
 static char selected_id[128], selected_uri[128];
 static struct { size_t rows, ff, eject, modes, cuts, final, infos, inits; } counts;
-static bool usb_present = true, can_open = true;
+static bool usb_present = true, can_open = true, fail_next_open;
 static ssize_t usb_matches = 1;
 static unsigned usb_enumerations, usb_reads, bt_reads, opens;
 static bool bt_eof;
@@ -115,7 +115,11 @@ bool pt_bt_is_uri(const char *uri)
 ssize_t pt_bt_read_status(pappl_device_t *d, const char *uri, void *buffer, size_t bytes)
 { (void)d; assert(pt_bt_is_uri(uri)); if (bt_eof) { bt_reads++; return -1; } return feed_status(&bt_reads, buffer, bytes); }
 static bool dev_open(pappl_device_t *d, const char *uri, const char *name)
-{ (void)d; (void)uri; (void)name; opens++; return can_open; }
+{
+    (void)d; (void)uri; (void)name; opens++;
+    if (fail_next_open) { fail_next_open = false; return false; }
+    return can_open;
+}
 static void dev_close(pappl_device_t *d) { (void)d; }
 static ssize_t dev_write(pappl_device_t *d, const void *buffer, size_t n)
 {
@@ -1446,6 +1450,121 @@ static void status_poll_wait_case(pappl_printer_t *usb)
     pt_run_set(usb, PT_RUN_CLOSED);
 }
 
+/* The newest active job; the fixture uses it for the streaming request. */
+static pappl_job_t *first_active_job;
+static void capture_active_job(pappl_job_t *job, void *data)
+{
+    (void)data;
+    if (!first_active_job) first_active_job = job;
+}
+static pappl_job_t *newest_active_job(pappl_printer_t *printer)
+{
+    first_active_job = NULL;
+    papplPrinterIterateActiveJobs(printer, capture_active_job, NULL, 1, 1);
+    return first_active_job;
+}
+
+/* A held PNG released while a later streaming job waits behind its cut: the
+ * newest-first scan must pass the streaming follower and start the PNG. */
+static void held_png_before_streaming_case(pappl_printer_t *usb)
+{
+    pappl_media_col_t media12; assert(media_col_for(12, 10000, 180, &media12));
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    pt_run_set(usb, PT_RUN_OPEN);
+    repeat_status();
+    reset_wire();
+
+    /* B is accepted and held before the cut; the cut and the later streaming
+     * follower then wait behind it. */
+    pappl_job_t *b = upload_image(usb, "none", 1, false, NULL, 85, 40, 42);
+    cut_request c1; pthread_t t1;
+    start_cut(&c1, &t1, usb);
+    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    assert(!cut_done(&c1));
+
+    job_submit s = {.printer = usb};
+    pthread_t st; assert(!pthread_create(&st, NULL, submit_raster_thread, &s));
+    for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
+        struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
+    }
+    nanosleep(&settle, NULL);
+    assert(papplPrinterGetNumberOfActiveJobs(usb) >= 2); /* held B and streaming S */
+    assert(!cut_done(&c1) && !job_done(&s));
+
+    /* Releasing B must start it even though S leads the active-job scan. */
+    assert(papplJobRelease(b, "test"));
+    await_terminal(b);
+    assert(papplJobGetState(b) == IPP_JSTATE_COMPLETED);
+    pthread_join(t1, NULL); pthread_join(st, NULL);
+    assert(cut_status(&c1) == IPP_STATUS_OK && job_done(&s));
+    assert(s.job && papplJobGetState(s.job) == IPP_JSTATE_COMPLETED);
+
+    wire_page pages[16];
+    size_t count = wire_pages(pages, 16);
+    assert(count == 3);
+    assert(pages[0].rows == tx(queued_png_rows) && pages[0].ink);
+    assert(pages[1].rows == 1 && !pages[1].ink);
+    assert(pages[2].rows == tx(queued_png_rows) && !pages[2].ink);
+    status_repeat = false;
+    pt_run_set(usb, PT_RUN_CLOSED);
+}
+
+/* A pending PNG behind a cut whose closure meets a canceled streaming request
+ * before that request finishes: its unowned completion must resume scheduling. */
+static void canceled_stream_behind_cut_case(pappl_printer_t *usb)
+{
+    pappl_media_col_t media12; assert(media_col_for(12, 10000, 180, &media12));
+    assert(papplPrinterSetReadyMedia(usb, 1, &media12));
+    pt_run_set(usb, PT_RUN_OPEN);
+    repeat_status();
+    reset_wire();
+
+    /* Hold the device so the cut, the PNG accepted behind it, and then the
+     * streaming request all wait their turns. */
+    assert(papplPrinterOpenDevice(usb));
+    cut_request c1; pthread_t t1;
+    start_cut(&c1, &t1, usb);
+    struct timespec settle = {0, 200000000L}; nanosleep(&settle, NULL);
+    assert(!cut_done(&c1));
+
+    pappl_job_t *p = upload_image(usb, "none", 1, false, NULL, 85, 40, 42);
+    assert(papplJobRelease(p, "test"));
+    job_submit s = {.printer = usb};
+    pthread_t st; assert(!pthread_create(&st, NULL, submit_raster_thread, &s));
+    for (int i = 0; i < 2000 && papplPrinterGetNumberOfActiveJobs(usb) < 2; i++) {
+        struct timespec d = {0, 1000000L}; nanosleep(&d, NULL);
+    }
+    nanosleep(&settle, NULL);
+    assert(papplPrinterGetNumberOfActiveJobs(usb) >= 2);
+    pappl_job_t *stream = newest_active_job(usb);
+    assert(stream && papplJobGetID(stream) > papplJobGetID(p));
+    assert(!cut_done(&c1) && !job_done(&s));
+
+    /* Cancel the waiting stream, then force the cut's device open to fail once
+     * so its closure removes the barrier while the canceled request is active. */
+    pt_printer_state *state = pt_state(usb);
+    int saved_poll = state->idle_poll_seconds;
+    state->idle_poll_seconds = 0; /* No idle probe may consume the failed open. */
+    fail_next_open = true;
+    papplJobCancel(stream);
+    papplPrinterCloseDevice(usb);
+    pthread_join(t1, NULL);
+    state->idle_poll_seconds = saved_poll;
+
+    assert(cut_status(&c1) == IPP_STATUS_ERROR_BUSY);
+    await_terminal(p);
+    assert(papplJobGetState(p) == IPP_JSTATE_COMPLETED);
+    pthread_join(st, NULL);
+    assert(job_done(&s) && s.job && papplJobGetState(s.job) == IPP_JSTATE_CANCELED);
+
+    wire_page pages[16];
+    size_t count = wire_pages(pages, 16);
+    assert(count == 1);
+    assert(pages[0].rows == tx(queued_png_rows) && pages[0].ink);
+    status_repeat = false;
+    pt_run_set(usb, PT_RUN_CLOSED);
+}
+
 static unsigned named(ipp_t *reply, const char *name)
 {
     unsigned n = 0;
@@ -1637,6 +1756,8 @@ static void cut_cases(pappl_printer_t *usb, pappl_printer_t *bt, pappl_device_t 
     queue_order_case(usb);
     streaming_follower_case(usb);
     status_poll_wait_case(usb);
+    held_png_before_streaming_case(usb);
+    canceled_stream_behind_cut_case(usb);
     /* An open failure at the cut's turn is still busy, without a queued retry. */
     pt_run_set(usb, PT_RUN_OPEN); reset_wire();
     unsigned reads = usb_reads;

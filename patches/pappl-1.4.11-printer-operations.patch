@@ -1,5 +1,5 @@
 diff --git a/pappl/job-process.c b/pappl/job-process.c
-index 3fb7a2a..9006ba7 100644
+index 3fb7a2a..7a7a95d 100644
 --- a/pappl/job-process.c
 +++ b/pappl/job-process.c
 @@ -1125,6 +1125,7 @@ finish_job(pappl_job_t  *job)		// I - Job
@@ -64,7 +64,7 @@ index 3fb7a2a..9006ba7 100644
  
    cupsArrayRemove(printer->active_jobs, job);
    cupsArrayAdd(printer->completed_jobs, job);
-@@ -1197,25 +1206,28 @@ finish_job(pappl_job_t  *job)		// I - Job
+@@ -1197,24 +1206,29 @@ finish_job(pappl_job_t  *job)		// I - Job
      papplPrinterDelete(printer);
      return;
    }
@@ -96,12 +96,12 @@ index 3fb7a2a..9006ba7 100644
      _papplRWUnlock(printer);
    }
  
--  if (papplPrinterGetNumberOfActiveJobs(printer) > 0)
-+  if (owned && papplPrinterGetNumberOfActiveJobs(printer) > 0)
++  // An unowned completion still frees its active-job slot; reschedule after it
++  // while the check below defers to any device owner already in place.
+   if (papplPrinterGetNumberOfActiveJobs(printer) > 0)
    {
      _papplRWLockWrite(printer);
-     _papplPrinterCheckJobsNoLock(printer);
-@@ -1241,6 +1253,29 @@ start_job(pappl_job_t *job)		// I - Job
+@@ -1241,6 +1255,29 @@ start_job(pappl_job_t *job)		// I - Job
    _papplRWLockWrite(printer);
    _papplRWLockWrite(job);
  
@@ -132,7 +132,7 @@ index 3fb7a2a..9006ba7 100644
  
    job->state              = IPP_JSTATE_PROCESSING;
 diff --git a/pappl/job.c b/pappl/job.c
-index 3141759..c198aad 100644
+index 3141759..a1257e7 100644
 --- a/pappl/job.c
 +++ b/pappl/job.c
 @@ -28,7 +28,9 @@ papplJobCancel(pappl_job_t *job)	// I - Job
@@ -150,18 +150,18 @@ index 3141759..c198aad 100644
      {
        pthread_t	t;			// Thread
  
++      if (_papplPrinterCutBarrierNoLock(printer, job))
++      {
++	papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Holding job %d behind a queued cut.", job->job_id);
++	continue;
++      }
++
 +      if (job->streaming)
 +      {
 +	// The request thread owns this streaming-raster job; leave it and any
 +	// later jobs in place instead of dispatching the job a second time.
 +	papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Streaming job %d is owned by its request.", job->job_id);
 +	break;
-+      }
-+
-+      if (_papplPrinterCutBarrierNoLock(printer, job))
-+      {
-+	papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Holding job %d behind a queued cut.", job->job_id);
-+	continue;
 +      }
 +
        papplLogPrinter(printer, PAPPL_LOGLEVEL_DEBUG, "Starting job %d.", job->job_id);
