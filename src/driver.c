@@ -897,7 +897,7 @@ bool pt_cut_op_cb(pappl_client_t *client, void *data)
     }
     /* Print-Job/Create-Job policy; on denial PAPPL has sent the HTTP error. */
     if (!papplPrinterIsAuthorized(client)) return true;
-    pappl_device_t *device = papplPrinterOpenDevice(printer);
+    pappl_device_t *device = papplPrinterOpenDeviceQueued(printer);
     if (!device) {
         papplClientRespondIPP(client, IPP_STATUS_ERROR_BUSY, "Printer is busy or unavailable; try again later.");
         return true;
