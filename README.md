@@ -341,9 +341,11 @@ failed job after recovery. A clean status or USB replug alone does not clear
 uncertainty; server restart alone does not clear the printer's buffered raster.
 In-memory job history and an unfinished tape run are not promised to survive
 restart, and the server does not automatically replay ambiguous output. A
-validation rejection, such as end-margin ink or an incomplete first page, sends
-no page output and preserves a healthy prior run, so it needs no power-cycle or
-restart; only genuinely interrupted output requires the sequence above.
+P710BT page rejected before output, such as end-margin ink or an incomplete
+first page, sends no page output and preserves a healthy preceding run, so it
+needs no power-cycle or restart. Recovery is still required when earlier output
+is already uncertain or when genuine output is interrupted, as happens for
+PT-2730, which streams each page.
 
 ```yaml
 services:

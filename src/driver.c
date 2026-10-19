@@ -91,26 +91,12 @@ static bool pt_job_write(pappl_job_t *job, pappl_device_t *device, const uint8_t
  * `write_failed` means the status request itself was not sent. */
 typedef struct { ssize_t n; bool parsed; bool write_failed; pt_status st; } pt_live_read;
 
-/* A reply already waiting on the connection would otherwise answer the request
- * about to be sent. Drain input within the existing bounded status budget until
- * a read reports no data: 0 when the boundary is established, -1 on an I/O
- * error, 1 when the stream did not end within the budget. */
-static int pt_drain_status(pappl_device_t *device, const char *uri)
-{
-    uint8_t scratch[32];
-    for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
-        ssize_t n = pt_read_status(device, uri, scratch, sizeof scratch);
-        if (n < 0) return -1;
-        if (n == 0) return 0;
-    }
-    return 1;
-}
-
-/* Read the live tape from an already-open device: discard queued input, send
- * ESC i S, then poll for the reply. The caller owns the device and interprets
- * the result; a supported tape is `parsed && st.tape_px > 0`. Validate transport
- * before any command or connection-data access; a socket sink has no status
- * path. */
+/* Read the live tape from an already-open device: discard input already queued
+ * on the connection, send ESC i S, then poll for the reply, sharing one bounded
+ * status budget across draining and response collection. The caller owns the
+ * device and interprets the result; a supported tape is `parsed && st.tape_px >
+ * 0`. Validate transport before any command or connection-data access; a socket
+ * sink has no status path. */
 static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
 {
     uint8_t cmd[8];
@@ -119,11 +105,19 @@ static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
         r.n = -1;
         return r;
     }
-    int drain = pt_drain_status(device, uri);
-    if (drain != 0) {
-        r.n = drain < 0 ? -1 : 0;
-        return r;
+    uint8_t drain_buf[32];
+    int tries = PT_STATUS_POLL_TRIES;
+    /* A reply already waiting on the connection would otherwise answer the
+     * request about to be sent, so consume queued input until a read reports no
+     * data. Exhausting the budget leaves media unconfirmed. */
+    bool drained = false;
+    while (tries > 0) {
+        ssize_t n = pt_read_status(device, uri, drain_buf, sizeof drain_buf);
+        tries--;
+        if (n < 0) { r.n = -1; return r; }
+        if (n == 0) { drained = true; break; }
     }
+    if (!drained) return r;
     if (!pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
         r.n = -1;
         r.write_failed = true;
@@ -132,10 +126,11 @@ static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
 
     uint8_t buf[32] = {0};
     size_t used = 0;
-    for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
+    while (tries > 0) {
         struct timespec w = {0, PT_STATUS_POLL_NS};
         nanosleep(&w, NULL);
         ssize_t n = pt_read_status(device, uri, buf + used, sizeof buf - used);
+        tries--;
         if (n < 0) { r.n = n; break; }
         used += (size_t)n;
         r.n = (ssize_t)used;
@@ -466,8 +461,6 @@ static bool pt_wait_for_tape(pappl_job_t *j, pappl_device_t *d, int wanted)
         if (pt_publish_tape(printer, live) && live.st.tape_mm == wanted) {
             b->tape_mm = (uint8_t)wanted;
             papplJobSetMessage(j, "Loaded tape matches %d mm", wanted);
-            papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Tape decision: requested %d mm, reported %d mm",
-                        wanted, live.st.tape_mm);
             return true;
         }
         if (live.parsed) loaded = live.st.tape_mm;
@@ -514,6 +507,11 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     pt_run run = pt_run_get(printer);
     if (run == PT_RUN_UNCERTAIN && b->first_label) return pt_fail_job(j);
     if (tape_mm != b->tape_mm && !pt_wait_for_tape(j, d, tape_mm)) return pt_fail_job(j);
+    /* One entry per job, whether the reported tape matched immediately or only
+     * after waiting. The incident logs omitted the accepted reading. */
+    if (b->first_label)
+        papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Tape decision: requested %d mm, reported %d mm",
+                    tape_mm, b->tape_mm);
     if (p710bt) {
         /* Stage the whole page first; setup, prior-page release and output wait
          * for r_endpage so trailing ink cannot latch uncertain output. */

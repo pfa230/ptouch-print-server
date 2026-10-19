@@ -605,6 +605,7 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
                                 int damage)
 {
     const unsigned *lengths = raster_lengths;
+    pt_run before = pt_run_get(printer);
     char path[] = "/tmp/ptouch-batch-raster-XXXXXX";
     write_raster(path, pages, bits, mode, damage);
     char resource[128], uri[256];
@@ -647,13 +648,18 @@ static void raster_socket_case(pappl_printer_t *printer, const char *finishing,
          * fail as incomplete input without finishing. */
         if (damage == 1)
             expect_wire(1, tx(180), 0, 0);
+        else if (is_p710bt() && pages == 1)
+            /* An incomplete first page is rejected while staged: no setup or
+             * raster leaves and the run is not reclassified as uncertain. */
+            expect_wire(0, 0, 0, 0);
         else if (is_p710bt())
             /* The truncated later page never reaches end-of-page, so only the
              * first page's staged output left the printer. */
             expect_wire(1, tx(180), 0, 0);
         else
             expect_wire(1, 539, 1, 0);
-        assert(pt_run_get(printer) == PT_RUN_UNCERTAIN);
+        assert(pt_run_get(printer) == (is_p710bt() && pages == 1 && damage == 2
+                                       ? before : PT_RUN_UNCERTAIN));
     } else {
         pt_cut_mode selected = !strcmp(finishing, "none") ? PT_CUT_NONE :
                                !strcmp(finishing, "ptouch-chain") ? PT_CUT_CHAIN :
@@ -1215,7 +1221,7 @@ static void wait_cases(pappl_printer_t *usb, pappl_device_t *d)
     /* A 12 mm page inherits 18 mm margins, waits through an empty read, then prints. */
     pt_run_set(usb, PT_RUN_CLOSED); assert(papplPrinterSetReadyMedia(usb, 1, &media18)); reset_wire();
     const int swapped[] = {18, 18, 12, 12}; queue_tapes(swapped, 4, false);
-    status_gap_at = 64; status_gap_reads = 1 + PT_STATUS_POLL_TRIES;
+    status_gap_at = 64; status_gap_reads = PT_STATUS_POLL_TRIES;
     pappl_job_t *j = media_job(usb, "none", 1, false, twelve);
     pappl_pr_options_t *o = begin(j, d);
     assert(o->header.cupsWidth == 85 && o->media.left_margin == g18.left_margin_centimm &&
@@ -1956,7 +1962,8 @@ static void cut_cases(pappl_printer_t *usb, pappl_printer_t *bt, pappl_device_t 
      * replies still reach the blank page's own receive-ready. */
     pt_run_set(usb, PT_RUN_OPEN); queue_tapes(&twelve, 1, true);
     memmove(statuses + 32, statuses, 128); memcpy(statuses, statuses + 128, 32);
-    status_size = 160; status_chunk = 7; reset_wire();
+    /* Fragments must fit the shared exchange budget alongside the drain read. */
+    status_size = 160; status_chunk = 8; reset_wire();
     assert(cut(usb) == IPP_STATUS_OK && status_used == 160);
     expect_cut_wire(true, 12); assert(pt_run_get(usb) == PT_RUN_OPEN_BLANK);
     /* Completion without receive-ready, an error phase, a lost link, or a failed
@@ -2646,6 +2653,11 @@ int main(int argc, char **argv)
         assert(papplPrinterSetReadyMedia(capture, 1, &media12));
         pt_run_set(capture, PT_RUN_CLOSED);
         png_socket_case(capture, "none", 1, false, 1, 1, 0);
+        /* An incomplete first page sends no setup or raster and leaves the run
+         * unchanged; a valid follower prints without simulated recovery. */
+        pt_run_set(capture, PT_RUN_CLOSED);
+        raster_socket_case(capture, "trim", false, 1, 1, 1, CUPS_RASTER_WRITE_PWG, 2);
+        raster_socket_case(capture, "trim", false, 1, 1, 1, CUPS_RASTER_WRITE_PWG, false);
     }
     pappl_printer_t *counter = papplPrinterCreate(sys, 0, "counter", "brother_ptouch",
                               selected_id, "fixture://counter"); assert(counter);
