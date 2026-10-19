@@ -1,0 +1,20 @@
+# Tasks
+
+## 1. Preserve diagnostic metadata safely
+
+- [ ] 1.1 Extend the existing pinned PAPPL job-history patch to save/load optional message text and restore unfinished `brother_ptouch` jobs as aborted completed history, removing their input files before scheduling; verify message roundtrips (including quotes and percent signs), legacy records without messages, and saved processing/stopped jobs with surviving inputs in focused state fixtures based on `tests/test_pappl_finishings.c`, with no active jobs or device output.
+- [ ] 1.2 Update `patches/README.md` for the correction's scope and removal criteria; verify strict patch application in both existing Docker build paths and that generic PAPPL fixture drivers retain their existing behavior.
+
+## 2. Load before creating the queue
+
+- [ ] 2.1 Honor the existing spool-directory option in `src/main.c`, register the persistent save callback and load once before creating a missing configured queue; verify the actual app with a selected directory starts with exactly one matching queue, retains saved history, and rejects restored identity conflicts instead of selecting another device.
+- [ ] 2.2 Extend `scripts/smoke-image.py` to replace a container against the same mounted directory after its successful, malformed-PNG, and canceled jobs; verify IDs, saved fields, exact failure explanations through IPP and web history, advancing new-job IDs, zero replay, and existing disabled completed-document retention. Update README history/recovery text to match these outcomes and the explicit directory option.
+
+## 3. Retain state outside the container
+
+- [ ] 3.1 Set the image entrypoint's existing spool-directory option to `/var/lib/ptouch` and bind `/data/ptouch/state` there in `deploy/pi/user-data`; add matching persistent mounts to the USB Compose and manual Bluetooth examples. Verify the rendered service creates/uses the directory on `/data`, matches the image path, and retains existing host networking, journald and USB settings; the image smoke must exercise this entrypoint.
+- [ ] 3.2 Document the installed-Pi service migration, last-successful-save limitation, lack of backfill for lost history, and rollback in `docs/PI-DEPLOYMENT.md`; review commands against the read-only-root maintenance procedure and distinguish application history from journal logs and printer run state.
+
+## 4. Integration verification
+
+- [ ] 4.1 Run the full `cmake -S . -B build`, `cmake --build build`, and `ctest --test-dir build --output-on-failure` with pinned patched dependencies, build `Dockerfile.deploy`, run its image smoke for PT-2730 and PT-P710BT, and run `openspec validate --all --strict --no-interactive`; record results as software/container evidence, with real Pi reboot persistence requiring separately authorized deployment validation.

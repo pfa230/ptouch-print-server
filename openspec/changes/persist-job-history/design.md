@@ -1,0 +1,126 @@
+# Design
+
+## Context
+
+See `proposal.md` for the problem. The live Pi container has no mounts; `deploy/pi/user-data` removes it at service start and uses `docker run --rm`. Journald is already on `/data/journal`, so changing logging cannot restore the web job list.
+
+`src/main.c:system_cb` creates `ptouch` before returning to PAPPL. Pinned PAPPL 1.4.11's `mainloop-subcommands.c` then installs its default save callback and calls `papplSystemLoadState`. `system-loadsave.c` explicitly drops a saved printer and its jobs when creation finds that printer already exists. The same file saves identifiers, state/reasons, times and impression counts but not the `message` rendered by our existing job-history patch. Its default unfinished-job restoration can add surviving documents to `active_jobs`.
+
+Existing `job-history` clauses already define the displayed fields, 20-row landing page, and failure explanations. Existing architecture clauses retain one configured queue, PAPPL scheduling, and conservative output recovery. This change adds durability, not another history interface.
+
+## Goals / Non-Goals
+
+**Goals:** Use one PAPPL state file and the existing retention machinery, loading once before creating a missing queue; make the supplied deployment retain that state independently of container lifetime.
+
+**Non-Goals:** A second database or spooler, journal import, completed-document archival, persisted hardware continuation, automatic print resumption, a new retention setting, or power-loss guarantees beyond PAPPL's last successful state save. Changing the running Pi is a later deployment action.
+
+## Decisions
+
+### 1. Honor the existing spool-directory option
+
+Read PAPPL's existing `-o spool-directory=...` in `system_cb`, pass it to `papplSystemCreate`, and use `<directory>/ptouch-app.state` for the application's save/load callback. Keep the callback's filename alive for the server lifetime. Without that option, retain the existing temporary spool behavior and use a per-user state filename under `papplGetTempDir`; only a supplied persistent directory promises deployment durability. An explicitly selected directory must not silently fall back to temporary storage.
+
+The image entrypoint will create `/var/lib/ptouch` and pass `-o spool-directory=/var/lib/ptouch`. The Pi service will bind `/data/ptouch/state` there, creating that directory on the existing data partition; the USB Compose and manual Bluetooth examples will mount a persistent directory at the same destination. Reuse the existing service/update mechanism.
+
+A mounted spool also temporarily retains unfinished document and attribute files. Keep PAPPL's existing disabled completed-document retention; the restoration path below removes interrupted-job files instead of printing them. A separate metadata-only volume plus temporary document spool would need another path mechanism without improving the requested history behavior.
+
+### 2. Take ownership of save/load order through PAPPL APIs
+
+After registering the transport, driver, operation callback, and PNG filter, register `papplSystemSetSaveCallback` and load the selected file before creating a queue. A registered save callback suppresses the mainloop's later automatic load. Reuse the restored `ptouch` queue; create it only on a fresh state directory. Keep the existing configuration authoritative: a saved queue that conflicts with the configured supported model or resolved transport URI must fail startup clearly rather than select a different device. Do not duplicate queue-creation paths for restoration.
+
+Using only a volume leaves the duplicate-printer failure. Loading after creating the queue has the same failure. Replacing the mainloop or adding a history parser is unnecessary because PAPPL exposes save/load and already permits a developer-supplied callback.
+
+### 3. Extend the existing bounded job-history correction
+
+Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. Older records with no message remain readable; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery.
+
+For the existing `brother_ptouch` driver only, normalize every restored nonterminal job, including stopped jobs, to aborted completed history before it can enter `active_jobs`. Set an interruption/resubmission message, appending any saved diagnostic, set completion metadata, and remove its no-longer-printable spool files through existing cleanup operations. Do not restore driver run state or issue device commands. Other PAPPL fixture drivers keep their native restoration behavior. Update `patches/README.md` with this scope and removal criteria; both Dockerfiles already apply the same patch.
+
+Leaving the native loader unchanged can replay a surviving document. Relying on missing spool files also fails: missing job attributes can leave a nonterminal record, and persisted files can enter the active queue. Calling the public cancel API after restoring a processing job leaves cancellation waiting for a worker that no longer exists. Normalizing inside the existing loader avoids another public mode or API.
+
+### 4. Verify the real startup path using the existing image smoke
+
+Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation; include quoted text and percent signs in the state-message roundtrip fixture. Check that terminal jobs have no retained document payloads.
+
+Add focused pinned-library coverage for restoring an unfinished `brother_ptouch` job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses.
+
+Run the normal full CMake/CTest build with the pinned patched dependencies and the deploy-image smoke for both supported models. Core-only tests do not exercise startup or state restoration. A Pi reboot check can establish the real bind mount's persistence without printing; record it separately when a live deployment is authorized.
+
+## Risks / Trade-offs
+
+- **Last unsaved changes during power loss:** durability covers the last successful PAPPL save, not a new synchronous audit log; do not promise every job survives abrupt power removal.
+- **Saved unfinished work:** it returns as aborted history requiring explicit resubmission; preserving documents must not silently enable resumption.
+- **Older saved records:** optional message loading preserves compatibility, but missing historical message text cannot be reconstructed.
+- **Existing hardware run after restart:** history restoration does not establish printer readiness or recover a held/uncertain run; keep the existing recovery procedure.
+
+## Migration Plan
+
+Update the image, service template and documentation together. For an existing Pi, document creating `/data/ptouch/state` and adding the bind mount to the service through the read-only-root maintenance procedure; changing the image alone cannot modify the installed systemd unit. Inspect/finish or recover any held print run before restarting. New cards receive the mount from `user-data`; the existing updater continues to select images and restart the service.
+
+Use an existing state file only if it is actually available before container removal; previously deleted containers' job history has no supported backfill. Rollback keeps the host directory and mount; the old image may ignore the new history path and must not be described as preserving history. Diagnostic journal storage stays as configured.
+
+## Cut pass
+
+Removed from the candidate approach:
+
+- A separate metadata-only directory and temporary-spool path: one mounted existing spool directory serves history durability and existing cleanup removes documents.
+- A new state-directory environment option: the existing spool-directory option selects the needed path.
+- A new public history-only loader mode: the existing driver name scopes the small pinned correction.
+- A separate startup/history test harness: the image smoke already starts the real app, submits representative jobs, captures output and reads web rows.
+
+Kept items, each with its contract and the failure of the smaller alternative:
+
+- History durability sentence: new `Saved job history survives restart`; process-only records disappear on container replacement.
+- Saved metadata sentence: the same requirement; retaining only IDs loses the status and explanations the user needs.
+- Persistent deployment sentence: the same requirement; a working serializer still loses its file with an unmounted container.
+- Container-replacement scenario: the same requirement; a library-only roundtrip misses both the missing mount and duplicate-queue startup.
+- Interrupted-history sentence: new `Interrupted jobs return as history`; retaining a pending/processing state can reactivate saved input.
+- Unfinished-input scenario: the same requirement; omitting surviving inputs would miss the loader's active-job branch.
+- Existing recovery prohibition sentence: carried unchanged under MODIFIED as required by the delta format; removal would weaken the existing no-replay contract.
+- Existing idempotent-cleanup sentence: carried unchanged; removal would weaken abort cleanup.
+- Existing explicit-recovery sentence: carried unchanged; removal would authorize recovery without inspection and resubmission.
+- Recovery qualification sentence: architecture `Conservative output recovery`; retaining the queue/history disclaimer would contradict the new durability requirement.
+- Existing incomplete-label scenario: carried unchanged with its requirement; removing it would drop the existing interrupted-output case.
+- Spool-directory option handling: history durability; ignoring the already available option leaves the mounted path unused.
+- Persistent directory and Pi bind mount: persistent deployment sentence; no mount repeats the observed loss.
+- Temporary per-user default: existing runnable application outside the supplied container; an unconditional root-owned deployment path breaks nonroot invocation.
+- State filename retained for callback lifetime: PAPPL save API stores callback data; a callback-local filename would expire before saving.
+- Save callback registration before load: history durability; leaving registration to the mainloop repeats its late load.
+- Load before fallback queue creation: history durability and existing single-queue contract; create-first drops the saved printer's history.
+- Restored identity validation: existing supported/configured-device contract; blindly trusting the saved URI can select the old Bluetooth address instead of current configuration.
+- Existing PAPPL state record: history durability; a second database duplicates serialization and retention.
+- Existing job-number field: saved metadata; losing it breaks references to earlier jobs.
+- Existing next-job-number field: saved metadata and native PAPPL job identity; restarting at one collides with restored IDs.
+- Existing job-name field: saved metadata; omitting it hides which document failed.
+- Existing owner field: saved metadata; omitting it loses the submitted identity already shown by the UI.
+- Existing timestamp fields: saved metadata; omitting them loses ordering and failure time.
+- Existing page-count fields: saved metadata; omitting them loses recorded progress.
+- Existing terminal-state field: saved metadata; omitting it loses completed/aborted/canceled distinctions.
+- Existing reason-bit field: saved metadata and existing failure-reason fallback; omitting it leaves old/message-free records unexplained.
+- Optional message field: saved metadata and existing `Failed jobs show their reason`; current PAPPL serialization demonstrably omits the displayed text.
+- Existing option escaping and literal message restoration: exact saved message; raw token splitting or interpreting a diagnostic as a format string changes its text.
+- Driver-scoped nonterminal normalization: interrupted-history requirement and existing no-replay rule; native restoration can reactivate surviving documents.
+- Interruption message/completion metadata: interrupted-history requirement; changing state alone does not explain why the job stopped.
+- Input-file cleanup with existing disabled completed-document retention: existing PAPPL behavior and proposal boundary against archival; mounting the spool otherwise leaves interrupted payloads behind.
+- Existing retention limit: bounded history requirement; a second limit would add an unnecessary setting and differing eviction policy.
+- Message/legacy-record state fixture: saved metadata; container-only coverage does not directly exercise absent/escaped message fields.
+- Processing/stopped restoration fixtures with present inputs: interrupted-history requirement; the native loader treats STOPPED differently from earlier states.
+- Generic-driver regression in the same fixture: bounded dependency correction; unconditional normalization would change unrelated fixture scheduling.
+- Real-app image replacement smoke: persistent history scenario; isolated save/load cannot expose the app's create-before-load defect.
+- One-queue and advancing-ID assertions in that smoke: existing stable queue and native identity; history text alone can pass despite duplicate queues or ID reuse.
+- IPP/web message assertions in that smoke: existing visible-history clauses plus durability; file contents alone do not establish that users see the restored explanation.
+- Zero-output assertion: existing conservative recovery; visible aborted history alone does not establish that restoration never dispatched its input.
+- Full build/CTest and both model image smokes: project-required adapter verification; core-only checks never execute application startup or pinned PAPPL state code.
+- New-card service/example changes: persistent deployment sentence; updating only the app still leaves an unmounted state file.
+- Installed-Pi migration documentation: explicit requested Pi fix; a cloud-init template update never changes the already installed systemd unit.
+- Patch scope/removal documentation: existing bounded dependency-correction requirement; undocumented new loader behavior cannot be safely reevaluated on a dependency update.
+- Last-save/backfill/rollback explanation: proposal's deployment documentation request; promising recovery of already deleted or unsaved records would be false.
+- Task 1.1: saved metadata and interrupted history; omitting it retains the loader's missing-message/replay behavior.
+- Task 1.2: bounded dependency corrections; omitting it leaves scope/application unverified.
+- Task 2.1: history durability; omitting it retains duplicate-printer loss.
+- Task 2.2: visible durable history; omitting it leaves actual container recreation unverified.
+- Task 3.1: persistent deployment sentence; omitting it reproduces the live Pi's missing mount.
+- Task 3.2: user-requested existing-Pi fix; omitting it leaves existing installations without an upgrade path.
+- Task 4.1: project-required integration verification; narrower core tests do not exercise the changed system.
+
+No new scheduler, database, retention knob, public API, journal mechanism, or device-run state field remains in the plan.
