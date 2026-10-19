@@ -121,7 +121,7 @@ One IPP job SHALL define one batch. Standard finishings SHALL select chain-and-f
 
 ### Requirement: Constant-size deferred batch lifecycle
 
-Batch state SHALL contain the resolved policy, actual-label progress, one pending print command, and failure state without an operation array or extra raster buffer. PNG copies SHALL expand once; raster labels SHALL need no declared total. A next valid label SHALL release the prior complete label with FF and confirm readiness. Successful input completion SHALL release the final label with FF for continuation or late chain-off/EJECT for finishing.
+Batch state SHALL contain the resolved policy, actual-label progress, one pending print command, and failure state without an operation array; P710BT validation SHALL use at most one packed page buffer bounded by the supported maximum page length, independent of copy or batch count. PNG copies SHALL expand once; raster labels SHALL need no declared total. A next valid label SHALL release the prior complete label with FF and confirm readiness. Successful input completion SHALL release the final label with FF for continuation or late chain-off/EJECT for finishing.
 
 #### Scenario: Unknown label count
 

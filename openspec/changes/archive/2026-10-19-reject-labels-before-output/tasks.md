@@ -1,0 +1,13 @@
+# Tasks
+
+## 1. Reject invalid P710BT pages before output
+
+- [x] 1.1 Stage one bounded packed P710BT page in the existing driver callbacks, retaining header/tape validation and deferring prior-page release, uncertainty and setup until successful end-of-page. Reuse existing geometry, flags and finishing; release the buffer in existing cleanup and keep PT-2730 streaming. Extend `raster_end_ink_case` for leading and trailing rejection with zero page output and preserved run state, and add a PNG case matching the incident's 404x112 canvas, 18x57.01 mm page and row-11 ink followed by a valid job without simulated recovery. Exercise rejection after a healthy held run through the existing continuation fixture. Adapt existing first/later truncated-page and write-failure assertions to the new output boundary; verify first-page rejection does not latch uncertainty while actual transfer/readiness failures and prior uncertain output still do. Update README's validation/recovery explanation alongside this change. Verify through the P710BT driver and PNG geometry suites and retain existing successful byte/finishing captures.
+
+## 2. Confirm tape using a new status exchange
+
+- [x] 2.1 Discard queued USB/Bluetooth status input before issuing ESC i S in the shared bounded exchange; leave media unconfirmed if the input boundary or reply cannot be established. Adapt the existing transport fixture to release requested snapshots after request writes and readiness notifications after their matching FF/EJECT writes, while keeping unsolicited input separate. Extend the existing tape-wait case with an already queued 18 mm snapshot and a fresh 12 mm response for an 18 mm page: verify only status requests reach the device until matching tape arrives, and the existing canceled-wait case still permits the next job. Reuse fragmented/no-reply/I/O-error and held-run cases against both live-URI fixtures. Add the requested-versus-reported width entry through existing job logging and document that a faulty physical cassette reading is outside the reproduced queued-reply fix. Verify through the existing driver tests, with no reset, replay or new transport fallback.
+
+## 3. Verify integrated behavior
+
+- [x] 3.1 Run the repository's required `cmake -S . -B build`, `cmake --build build` and `ctest --test-dir build --output-on-failure` in the pinned full dependency container, and strict OpenSpec validation. Confirm both model driver suites, PNG geometry and existing cut admission/continuation tests pass, PT-2730 print captures remain unchanged, and only the new page buffer scales with page height rather than copies. Review the diff and documentation against the cut list in `design.md`; report software evidence separately from physical certification.

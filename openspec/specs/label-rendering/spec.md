@@ -36,7 +36,7 @@ The server SHALL use each PWG raster or URF page's submitted dimensions and reso
 
 #### Scenario: Incomplete blank trailing rows
 - **WHEN** a P710BT raster stream omits declared trailing rows that end feed would replace
-- **THEN** it still fails as incomplete input and receives no normal finishing, retaining existing uncertain-output recovery
+- **THEN** it fails as incomplete input before that page sends setup or raster, and recovery is required only if earlier output is already uncertain
 
 ### Requirement: Incomplete raster input fails visibly
 
@@ -136,7 +136,7 @@ When a job's first label is valid for a supported tape width other than the load
 
 ### Requirement: Page length includes P710BT end feed
 
-For a supported P710BT page with blank required end rows, the server SHALL count its existing 14-dot feed per end inside the requested page length, within one 180 dpi dot of conversion rounding. It SHALL preserve rendered ink scale and physical position. Ink in a replaced end row SHALL fail visibly without silent cropping or normal page finishing; uncertain output SHALL follow existing recovery.
+For a supported P710BT page with blank required end rows, the server SHALL count its existing 14-dot feed per end inside the requested page length, within one 180 dpi dot of conversion rounding. It SHALL preserve rendered ink scale and physical position. Ink in a replaced end row SHALL fail visibly without silent cropping or normal page finishing; uncertain output SHALL follow existing recovery. A P710BT page SHALL be complete and its required end rows verified blank before any of that page's setup or raster is sent.
 
 #### Scenario: Reported 36 mm PNG
 - **WHEN** a fitting PNG requests a 36 mm P710BT page with blank end rows
@@ -152,4 +152,4 @@ For a supported P710BT page with blank required end rows, the server SHALL count
 
 #### Scenario: Nonblank end row
 - **WHEN** a rendered P710BT page has printable ink in a row that end feed would replace
-- **THEN** the job fails without silently dropping that ink or normally finalizing the affected page, retaining existing uncertain-output recovery
+- **THEN** the job fails before that page sends setup or raster, without silently dropping that ink or normally finalizing the affected page
