@@ -91,16 +91,37 @@ static bool pt_job_write(pappl_job_t *job, pappl_device_t *device, const uint8_t
  * `write_failed` means the status request itself was not sent. */
 typedef struct { ssize_t n; bool parsed; bool write_failed; pt_status st; } pt_live_read;
 
-/* Read the live tape from an already-open device: ESC i S, then poll for
- * the reply. The caller owns the device and interprets the result; a supported
- * tape is `parsed && st.tape_px > 0`. Validate transport before any command or
- * connection-data access; a socket sink has no status path. */
+/* A reply already waiting on the connection would otherwise answer the request
+ * about to be sent. Drain input within the existing bounded status budget until
+ * a read reports no data: 0 when the boundary is established, -1 on an I/O
+ * error, 1 when the stream did not end within the budget. */
+static int pt_drain_status(pappl_device_t *device, const char *uri)
+{
+    uint8_t scratch[32];
+    for (int tries = 0; tries < PT_STATUS_POLL_TRIES; tries++) {
+        ssize_t n = pt_read_status(device, uri, scratch, sizeof scratch);
+        if (n < 0) return -1;
+        if (n == 0) return 0;
+    }
+    return 1;
+}
+
+/* Read the live tape from an already-open device: discard queued input, send
+ * ESC i S, then poll for the reply. The caller owns the device and interprets
+ * the result; a supported tape is `parsed && st.tape_px > 0`. Validate transport
+ * before any command or connection-data access; a socket sink has no status
+ * path. */
 static pt_live_read pt_read_live_tape(pappl_device_t *device, const char *uri)
 {
     uint8_t cmd[8];
     pt_live_read r = {0};
     if (!pt_live_uri(uri)) {
         r.n = -1;
+        return r;
+    }
+    int drain = pt_drain_status(device, uri);
+    if (drain != 0) {
+        r.n = drain < 0 ? -1 : 0;
         return r;
     }
     if (!pt_dev_write(device, cmd, pt_cmd_status_request(cmd))) {
@@ -146,7 +167,11 @@ typedef struct {
     pt_cut_policy policy;
     uint8_t tape_mm;
     bool first_label, page_active, pending, failed;
+    uint8_t *page;   /* one staged P710BT page: packed rows held until validation */
 } pt_batch;
+
+/* One packed row per logical row at the widest supported roll length. */
+#define PT_PAGE_BUF_BYTES (16u * (PT_ROLL_MAX_CENTIMM * 180 / 2540))
 
 static bool pt_finishing_value(int value, pt_cut_mode *mode)
 {
@@ -441,7 +466,8 @@ static bool pt_wait_for_tape(pappl_job_t *j, pappl_device_t *d, int wanted)
         if (pt_publish_tape(printer, live) && live.st.tape_mm == wanted) {
             b->tape_mm = (uint8_t)wanted;
             papplJobSetMessage(j, "Loaded tape matches %d mm", wanted);
-            papplLogJob(j, PAPPL_LOGLEVEL_INFO, "%s", papplJobGetMessage(j));
+            papplLogJob(j, PAPPL_LOGLEVEL_INFO, "Tape decision: requested %d mm, reported %d mm",
+                        wanted, live.st.tape_mm);
             return true;
         }
         if (live.parsed) loaded = live.st.tape_mm;
@@ -481,34 +507,31 @@ static bool r_startpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
         return pt_fail_job(j);
     }
     pappl_printer_t *printer = papplJobGetPrinter(j);
+    const pt_dev *model = pt_state(printer)->model;
+    bool p710bt = model->pid == 0x20af;
     /* Page setup is sent only after validating the actual page, never a stale
      * default header. Keep a healthy preceding run if validation rejected it. */
     pt_run run = pt_run_get(printer);
     if (run == PT_RUN_UNCERTAIN && b->first_label) return pt_fail_job(j);
     if (tape_mm != b->tape_mm && !pt_wait_for_tape(j, d, tape_mm)) return pt_fail_job(j);
+    if (p710bt) {
+        /* Stage the whole page first; setup, prior-page release and output wait
+         * for r_endpage so trailing ink cannot latch uncertain output. */
+        if (!b->page && !(b->page = malloc(PT_PAGE_BUF_BYTES))) return pt_fail_job(j);
+        b->page_active = true;
+        return true;
+    }
     if (b->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
     bool continuation = pt_chain_get(printer);
     pt_run_set(printer, PT_RUN_UNCERTAIN);
-    const pt_dev *model = pt_state(printer)->model;
-    bool p710bt = model->pid == 0x20af;
     uint8_t buf[100];
     if (b->first_label &&
-        ((!continuation && p710bt && !pt_job_write(j, d, buf, pt_cmd_invalidate(buf))) ||
-         (!continuation && !pt_job_write(j, d, buf, pt_cmd_init(buf))) ||
-         !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
-         (p710bt && !pt_job_write(j, d, buf, pt_cmd_auto_status(buf, true)))))
+        ((!continuation && !pt_job_write(j, d, buf, pt_cmd_init(buf))) ||
+         !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags))))
         return pt_fail_job(j);
-    /* The logical page stays whole; only the transmitted print area shrinks by
-     * the feed the hardware replaces at each end, so the feed is counted once. */
-    size_t info_len = p710bt ? pt_cmd_printinfo_extended(buf, b->tape_mm,
-                             o->header.cupsHeight - 2u * PT_END_MARGIN_PX,
-                             b->first_label && !continuation ? 0 : 1) :
-                             pt_cmd_printinfo(buf, b->tape_mm);
-    if (!pt_job_write(j, d, buf, info_len) ||
+    if (!pt_job_write(j, d, buf, pt_cmd_printinfo(buf, b->tape_mm)) ||
         !pt_job_write(j, d, buf, pt_cmd_setmode(buf, pt_cut_autocut(b->policy, b->first_label) ? 0x40 : 0)) ||
-        !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)) ||
-        (p710bt && (!pt_job_write(j, d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
-                   !pt_job_write(j, d, buf, pt_cmd_compression(buf, 2)))))
+        !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)))
         return pt_fail_job(j);
     b->first_label = false;
     b->page_active = true;
@@ -529,13 +552,16 @@ static bool r_writeline(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d
     uint8_t packed[16], buf[24];
     pt_pack_window(packed, l, g.left_px, g.imageable_px);
     const pt_dev *model = pt_state(papplJobGetPrinter(j))->model;
-    if (model->pid == 0x20af &&
-        (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= o->header.cupsHeight)) {
-        for (unsigned i = 0; i < sizeof packed; i++)
-            if (packed[i]) {
-                papplJobSetMessage(j, "Raster ink in a physical end margin that hardware feed replaces");
-                return pt_fail_job(j);
-            }
+    if (model->pid == 0x20af) {
+        if (y < PT_END_MARGIN_PX || y + PT_END_MARGIN_PX >= o->header.cupsHeight) {
+            for (unsigned i = 0; i < sizeof packed; i++)
+                if (packed[i]) {
+                    papplJobSetMessage(j, "Raster ink in a physical end margin that hardware feed replaces");
+                    return pt_fail_job(j);
+                }
+            return true;
+        }
+        memcpy(batch->page + (size_t)(y - PT_END_MARGIN_PX) * sizeof packed, packed, sizeof packed);
         return true;
     }
     size_t length = model->flags & FLAG_RASTER_PACKBITS ?
@@ -598,9 +624,47 @@ static bool pt_wait_ready(pappl_job_t *j, pappl_device_t *d)
 
 static bool r_endpage(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d, unsigned p)
 {
-    (void)o; (void)d; (void)p;
+    (void)p;
     pt_batch *batch = papplJobGetData(j);
     if (!batch || batch->failed || !batch->page_active || papplJobIsCanceled(j)) return pt_fail_job(j);
+    pappl_printer_t *printer = papplJobGetPrinter(j);
+    const pt_dev *model = pt_state(printer)->model;
+    if (model->pid != 0x20af) {
+        batch->page_active = false;
+        batch->pending = true;
+        return true;
+    }
+    /* The whole page rendered cleanly; only now release the preceding label and
+     * send this page's setup and interior rows. */
+    if (batch->pending && !pt_print_pending(j, d, false)) return pt_fail_job(j);
+    bool continuation = pt_chain_get(printer);
+    pt_run_set(printer, PT_RUN_UNCERTAIN);
+    uint8_t buf[100];
+    if (batch->first_label &&
+        ((!continuation && !pt_job_write(j, d, buf, pt_cmd_invalidate(buf))) ||
+         (!continuation && !pt_job_write(j, d, buf, pt_cmd_init(buf))) ||
+         !pt_job_write(j, d, buf, pt_cmd_rasterstart(buf, model->flags)) ||
+         !pt_job_write(j, d, buf, pt_cmd_auto_status(buf, true))))
+        return pt_fail_job(j);
+    /* The logical page stays whole; only the transmitted print area shrinks by
+     * the feed the hardware replaces at each end, so the feed is counted once. */
+    if (!pt_job_write(j, d, buf, pt_cmd_printinfo_extended(buf, batch->tape_mm,
+                              o->header.cupsHeight - 2u * PT_END_MARGIN_PX,
+                              batch->first_label && !continuation ? 0 : 1)) ||
+        !pt_job_write(j, d, buf, pt_cmd_setmode(buf, pt_cut_autocut(batch->policy, batch->first_label) ? 0x40 : 0)) ||
+        !pt_job_write(j, d, buf, pt_cmd_setadvanced(buf, 0)) ||
+        !pt_job_write(j, d, buf, pt_cmd_margin(buf, PT_END_MARGIN_PX)) ||
+        !pt_job_write(j, d, buf, pt_cmd_compression(buf, 2)))
+        return pt_fail_job(j);
+    unsigned rows = o->header.cupsHeight - 2u * PT_END_MARGIN_PX;
+    bool packbits = model->flags & FLAG_RASTER_PACKBITS;
+    for (unsigned y = 0; y < rows; y++) {
+        size_t length = packbits ?
+                        pt_cmd_sendraster_packbits(buf, batch->page + (size_t)y * 16, 16) :
+                        pt_cmd_sendraster(buf, batch->page + (size_t)y * 16, 16);
+        if (!pt_job_write(j, d, buf, length)) return pt_fail_job(j);
+    }
+    batch->first_label = false;
     batch->page_active = false;
     batch->pending = true;
     return true;
@@ -617,6 +681,7 @@ static bool r_endjob(pappl_job_t *j, pappl_pr_options_t *o, pappl_device_t *d)
     bool result = true;
     if (normal && batch->page_active) result = false;
     else if (normal && batch->pending) result = pt_print_pending(j, d, true);
+    free(batch->page);
     free(batch);
     papplJobSetData(j, NULL);
     return result;

@@ -127,6 +127,9 @@ widths are 6, 9, 12, 18, and 24 mm. A job whose first page is for another
 supported width waits, reports `media-needed`, and prints after the tape is
 swapped; cancel it to give up. A page matching no supported width, or a later
 page whose width differs from the job's tape, is refused before raster output.
+Before each status request the server discards any input already queued on the
+connection, so a reply left from an earlier exchange cannot answer the new
+request. That cannot correct a cassette sensor that reports the wrong width.
 The default `print-scaling=none` preserves physical size; explicit standard
 scaling requests use PAPPL's placement policy. The server does not silently
 choose fit or crop to rescue a mismatched design.
@@ -231,7 +234,10 @@ automatic status notification, thirteen-byte `ESC i z` print information with
 the transmitted print-area row count, a 14-dot feed margin, and TIFF PackBits
 rows. The print-area count is the requested logical page height minus the 28
 dots of end feed; those blank boundary rows are verified and not transmitted, so
-the feed is counted once and ink in a replaced end row fails the job. Its first
+the feed is counted once and ink in a replaced end row fails the job. A complete
+P710BT page is staged and its boundary rows verified before any of that page's
+setup or raster is sent, so end-margin ink or an incomplete first page is
+rejected with no page output and leaves a preceding healthy run intact. Its first
 page has indication 0 on a freshly initialized closed run; later pages and
 healthy cross-batch continuation use 1. Only a fresh P710BT run sends the
 100-byte invalidation and initialization; continuation sends neither.
@@ -334,7 +340,10 @@ then run `docker restart ptouch` and check
 failed job after recovery. A clean status or USB replug alone does not clear
 uncertainty; server restart alone does not clear the printer's buffered raster.
 In-memory job history and an unfinished tape run are not promised to survive
-restart, and the server does not automatically replay ambiguous output.
+restart, and the server does not automatically replay ambiguous output. A
+validation rejection, such as end-margin ink or an incomplete first page, sends
+no page output and preserves a healthy prior run, so it needs no power-cycle or
+restart; only genuinely interrupted output requires the sequence above.
 
 ```yaml
 services:
