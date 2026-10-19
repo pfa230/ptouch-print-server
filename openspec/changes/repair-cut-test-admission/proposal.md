@@ -9,7 +9,7 @@ Fixes #65
 ## What Changes
 
 - Repair the canceled-stream fixture so the server receives enough document data to admit the job, while the test still controls the remaining input needed to keep canceled completion behind the cut.
-- Run the full adapter container tests before the follow-up is reviewed and archived.
+- Run the full adapter container tests after each implementation, before this change's implementation review and archival.
 
 ## Capabilities
 
