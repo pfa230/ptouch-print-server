@@ -224,19 +224,19 @@ def start_container(name, image, model, sink, state):
         "-p", "127.0.0.1::8000", "-e",
         f"PTOUCH_DEVICE_URI=socket://host.docker.internal:{sink.port}",
         "-e", f"PTOUCH_MODEL={model}", image)
+
+
+def ready(name, directory, model):
     mapping = json.loads(run("docker", "inspect", "--format",
                              "{{json .NetworkSettings.Ports}}", name))
-    return mapping['8000/tcp'][0]['HostPort']
-
-
-def ready(port, directory, model):
+    port = mapping['8000/tcp'][0]['HostPort']
     url = f"ipp://127.0.0.1:{port}/ipp/print/ptouch"
     request = operation("Get-Printer-Attributes", "",
                         f'EXPECT printer-make-and-model WITH-VALUE "Brother {model}"')
     for attempt in range(20):
         try:
             ipp(url, directory, request)
-            return url
+            return port, url
         except RuntimeError:
             if attempt == 19:
                 raise
@@ -296,8 +296,8 @@ def main():
             directory = Path(temp)
             state = directory / "state"
             state.mkdir()
-            port = start_container(name, args.image, args.model, sink, state)
-            url = ready(port, directory, args.model)
+            start_container(name, args.image, args.model, sink, state)
+            port, url = ready(name, directory, args.model)
             image = directory / "label.png"
             png(image)
             attributes = operation("Get-Printer-Attributes",
@@ -394,8 +394,8 @@ def main():
                                    if line.startswith("Job ") and f'id="{canceled_id}"' in line.split())
             assert 'state="7"' in canceled_record and "format=" not in canceled_record, canceled_record
             run("docker", "rm", name)
-            port = start_container(name, args.image, args.model, sink, state)
-            url = ready(port, directory, args.model)
+            start_container(name, args.image, args.model, sink, state)
+            port, url = ready(name, directory, args.model)
             after = history_snapshot(url, directory, port)
             assert after[canceled_id][0]["job-state"][1] == "canceled", after[canceled_id]
             assert after == before, (before, after)
