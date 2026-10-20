@@ -30,6 +30,8 @@ After registering the transport, driver, operation callback, and PNG filter, reg
 
 Using only a volume leaves the duplicate-printer failure. Loading after creating the queue has the same failure. Replacing the mainloop or adding a history parser is unnecessary because PAPPL exposes save/load and already permits a developer-supplied callback.
 
+**Resolved review decision:** If configuration names a different model or transport URI, keep the existing choice to fail startup and preserve the saved directory. This follows this section's explicit conflict policy, the proposal's no-new-public-API boundary, and the requirement to preserve saved history rather than silently discard it. Do not retarget or automatically delete saved history. For an intentional printer change, the operator stops the service, moves the old `/data/ptouch/state` directory aside as an archive, creates a fresh directory at that path, then configures/pairs and starts the service again. Document the equivalent fresh-directory procedure for other deployments. The Pi pairing helper must describe pairing/configuration success accurately and point to this recovery when changing printers, rather than claim the server now prints regardless of its startup outcome. Preserve an archive until the operator chooses to remove it; no automatic archive manager or extra option is needed. Verify the mismatch leaves the prior state intact and that selecting fresh storage allows the newly configured queue to start.
+
 ### 3. Extend the existing bounded job-history correction
 
 Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. Older records with no message remain readable; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery.
@@ -40,9 +42,9 @@ Leaving the native loader unchanged can replay a surviving document. Relying on 
 
 ### 4. Verify the real startup path using the existing image smoke
 
-Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation; include quoted text and percent signs in the state-message roundtrip fixture. Check that terminal jobs have no retained document payloads.
+Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads.
 
-Add focused pinned-library coverage for restoring an unfinished `brother_ptouch` job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses.
+Add focused pinned-library coverage for restoring an unfinished `brother_ptouch` job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses.
 
 Run the normal full CMake/CTest build with the pinned patched dependencies and the deploy-image smoke for both supported models. Core-only tests do not exercise startup or state restoration. A Pi reboot check can establish the real bind mount's persistence without printing; record it separately when a live deployment is authorized.
 
@@ -76,6 +78,8 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Container-replacement scenario: the same requirement; a library-only roundtrip misses both the missing mount and duplicate-queue startup.
 - Interrupted-history sentence: new `Interrupted jobs return as history`; retaining a pending/processing state can reactivate saved input.
 - Unfinished-input scenario: the same requirement; omitting surviving inputs would miss the loader's active-job branch.
+- Saved-history identity sentence: new `Saved history belongs to the configured printer`, completing the already chosen fail-on-conflict policy; silent deletion loses the requested history and retargeting needs the new API excluded by the proposal.
+- Printer-change scenario: the same requirement; ordinary same-printer recreation never exercises the pairing helper's address change.
 - Existing recovery prohibition sentence: carried unchanged under MODIFIED as required by the delta format; removal would weaken the existing no-replay contract.
 - Existing idempotent-cleanup sentence: carried unchanged; removal would weaken abort cleanup.
 - Existing explicit-recovery sentence: carried unchanged; removal would authorize recovery without inspection and resubmission.
@@ -88,6 +92,8 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Save callback registration before load: history durability; leaving registration to the mainloop repeats its late load.
 - Load before fallback queue creation: history durability and existing single-queue contract; create-first drops the saved printer's history.
 - Restored identity validation: existing supported/configured-device contract; blindly trusting the saved URI can select the old Bluetooth address instead of current configuration.
+- Manual fresh-directory recovery and accurate pairing-helper output: saved-history identity requirement and existing intentional printer configuration; failure without this recovery leaves re-pairing stuck, while automatic archive management adds machinery a person can avoid by choosing fresh storage.
+- Identity-conflict and fresh-storage checks: saved-history identity requirement; checking rejection alone misses a service that cannot start with the intended replacement printer.
 - Existing PAPPL state record: history durability; a second database duplicates serialization and retention.
 - Existing job-number field: saved metadata; losing it breaks references to earlier jobs.
 - Existing next-job-number field: saved metadata and native PAPPL job identity; restarting at one collides with restored IDs.

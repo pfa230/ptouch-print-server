@@ -7,13 +7,13 @@
 
 ## 2. Load before creating the queue
 
-- [ ] 2.1 Honor the existing spool-directory option in `src/main.c`, register the persistent save callback and load once before creating a missing configured queue; verify the actual app with a selected directory starts with exactly one matching queue, retains saved history, and rejects restored identity conflicts instead of selecting another device.
+- [ ] 2.1 Honor the existing spool-directory option in `src/main.c`, register the persistent save callback and load once before creating a missing configured queue; verify the actual app with a selected directory starts with exactly one matching queue, retains saved history, rejects restored identity conflicts without changing saved state, and starts with the replacement configuration after selecting fresh storage.
 - [ ] 2.2 Extend `scripts/smoke-image.py` to replace a container against the same mounted directory after its successful, malformed-PNG, and canceled jobs; verify IDs, saved fields, exact failure explanations through IPP and web history, advancing new-job IDs, zero replay, and existing disabled completed-document retention. Update README history/recovery text to match these outcomes and the explicit directory option.
 
 ## 3. Retain state outside the container
 
 - [ ] 3.1 Set the image entrypoint's existing spool-directory option to `/var/lib/ptouch` and bind `/data/ptouch/state` there in `deploy/pi/user-data`; add matching persistent mounts to the USB Compose and manual Bluetooth examples. Verify the rendered service creates/uses the directory on `/data`, matches the image path, and retains existing host networking, journald and USB settings; the image smoke must exercise this entrypoint.
-- [ ] 3.2 Document the installed-Pi service migration, last-successful-save limitation, lack of backfill for lost history, and rollback in `docs/PI-DEPLOYMENT.md`; review commands against the read-only-root maintenance procedure and distinguish application history from journal logs and printer run state.
+- [ ] 3.2 Document the installed-Pi service migration, intentional printer-change procedure (stop, move old state aside, create fresh storage, reconfigure/pair, start), last-successful-save limitation, lack of backfill, and rollback in `docs/PI-DEPLOYMENT.md`; update `ptouch-pair` output to report pairing/configuration success accurately and point to the recovery for changed printers. Review commands against the read-only-root maintenance procedure and distinguish application history from journal logs and printer run state.
 
 ## 4. Integration verification
 
