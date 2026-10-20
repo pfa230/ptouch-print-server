@@ -149,7 +149,7 @@ The queue SHALL own closed, healthy-open, and uncertain run state with media con
 
 ### Requirement: Conservative output recovery
 
-Ambiguous transfer, decode, or readiness failure SHALL block later output without automatic reset, feed, cut, or replay. Cleanup SHALL be idempotent and emit no pending finalization. Recovery SHALL require printer power-cycle followed by server restart and explicit resubmission after inspection. Clean status or USB reopen SHALL NOT clear uncertainty; process-local queue/run persistence SHALL NOT be promised.
+Ambiguous transfer, decode, or readiness failure SHALL block later output without automatic reset, feed, cut, or replay. Cleanup SHALL be idempotent and emit no pending finalization. Recovery SHALL require printer power-cycle followed by server restart and explicit resubmission after inspection. Clean status or USB reopen SHALL NOT clear uncertainty; printer run state SHALL remain process-local, independently of saved job history.
 
 #### Scenario: Incomplete label
 
