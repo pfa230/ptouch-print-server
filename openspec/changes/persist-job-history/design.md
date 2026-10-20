@@ -71,7 +71,6 @@ Removed from the candidate approach:
 - A new public history-only loader mode and driver-name restriction: the bundled loader has no concrete native-resumption consumer to protect.
 - A legacy-record fixture and generic-driver restoration regression: the canceled-job smoke covers absent messages, and no existing fixture relies on native nonterminal restoration.
 - A separate startup/history test harness: the image smoke already starts the real app, submits representative jobs, captures output and reads web rows.
-
 - An advancing-new-job-ID smoke assertion: pinned PAPPL already saves and restores `NextJobId`; no observed failure justifies an additional check.
 - A zero-replay image-smoke assertion: the smoke recreates the container only after terminal jobs; the unfinished-job fixtures already exercise the native active-job restoration path and assert no device output.
 - A terminal-document-payload smoke assertion: completed-document retention is already disabled, with no demonstrated failure requiring another check.
