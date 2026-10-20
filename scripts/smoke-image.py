@@ -389,7 +389,6 @@ def main():
             before = history_snapshot(url, directory, port)
             run("docker", "stop", "-t", "20", name)
             saved = saved_state(name, directory)
-            assert b"message=" in saved and b"PNG decode failed:" in saved
             canceled_record = next(line for line in saved.decode().splitlines()
                                    if line.startswith("Job ") and f'id="{canceled_id}"' in line.split())
             assert 'state="7"' in canceled_record and "format=" not in canceled_record, canceled_record

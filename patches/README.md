@@ -150,9 +150,9 @@ before receiving data saved without a format, and preserved state on identity
 conflict.
 
 Remove this patch when a pinned upstream release lists jobs on the multi-queue
-landing page, renders and persists `job-state-message`, accepts records without a document
-format, and passes these
-history-only restoration checks without the correction.
+landing page, renders and persists `job-state-message`, accepts records without a
+document format, and passes these history-only restoration checks without the
+correction.
 
 ## PAPPL printer operations and printing authorization
 
