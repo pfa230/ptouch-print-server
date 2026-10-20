@@ -25,4 +25,4 @@ If saved history belongs to a model or transport URI different from the configur
 #### Scenario: Intentional printer change
 
 - **WHEN** a different printer is configured while the selected persistent directory still contains the preceding printer's state
-- **THEN** startup reports the conflict and preserves that state; selecting a fresh directory allows the configured replacement queue to start
+- **THEN** startup reports the conflict, identifies the fresh-state-directory recovery, and preserves that state
