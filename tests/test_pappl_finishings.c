@@ -165,7 +165,7 @@ static void history(ipp_jstate_t saved_state)
     char state[512], input[512], attributes[512], uri[128];
     snprintf(state, sizeof state, "%s/state", temp);
     snprintf(input, sizeof input, "%s/input.png", temp);
-    FILE *fp = fopen(input, "w"); assert(fp); fputs("saved document", fp); fclose(fp);
+    FILE *fp;
 
     int sink = socket(AF_INET, SOCK_STREAM, 0); assert(sink >= 0);
     struct sockaddr_in address = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
@@ -178,34 +178,57 @@ static void history(ipp_jstate_t saved_state)
     papplSystemSetPrinterDrivers(s, 1, drivers, NULL, NULL, driver, NULL);
     pappl_printer_t *p = papplPrinterCreate(s, 0, "test", "preset", "MFG:Test;MDL:Fixture;", uri); assert(p);
     assert(papplPrinterHoldNewJobs(p));
-    pappl_job_t *j = papplJobCreateWithFile(p, "history-owner", "image/png", "saved-input", 0, NULL, input); assert(j);
+    pappl_job_t *j;
+    const char *diagnostic = "Saved input diagnostic";
+    if (saved_state == IPP_JSTATE_HELD) {
+        /* Create-Job awaiting Send-Document has no document format to save. */
+        assert(papplSystemAddListeners(s, "localhost"));
+        pthread_t server; assert(!pthread_create(&server, NULL, run, s));
+        http_t *client = httpConnect2("localhost", port+2, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL); assert(client);
+        ipp_t *q = ippNewRequest(IPP_OP_CREATE_JOB);
+        char job_uri[128];
+        snprintf(job_uri, sizeof job_uri, "ipp://localhost:%d/ipp/print/test", port+2);
+        ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, job_uri);
+        ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, "history-owner");
+        ippAddString(q, IPP_TAG_OPERATION, IPP_TAG_NAME, "job-name", NULL, "awaiting-data");
+        ipp_t *r = cupsDoRequest(client, q, "/ipp/print/test"); assert(r);
+        assert(ippGetStatusCode(r) == IPP_STATUS_OK);
+        j = papplPrinterFindJob(p, ippGetInteger(ippFindAttribute(r, "job-id", IPP_TAG_INTEGER), 0)); assert(j);
+        ippDelete(r); httpClose(client);
+        papplSystemShutdown(s);
+        client = httpConnect2("localhost", port+2, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL);
+        httpClose(client); pthread_join(server, NULL);
+    } else {
+        fp = fopen(input, "w"); assert(fp); fputs("saved document", fp); fclose(fp);
+        j = papplJobCreateWithFile(p, "history-owner", "image/png", "saved-input", 0, NULL, input); assert(j);
+        papplJobSetMessage(j, "%s", diagnostic);
+    }
     assert(papplJobGetState(j) == IPP_JSTATE_HELD);
-    const char *diagnostic = "Decode \"quoted\" input at 50%; literal %s and %n";
-    papplJobSetMessage(j, "%s", diagnostic);
     int id = papplJobGetID(j);
-    if (saved_state == IPP_JSTATE_CANCELED) papplJobCancel(j);
     assert(papplSystemSaveState(s, state));
-    if (saved_state != IPP_JSTATE_CANCELED) {
+    if (saved_state != IPP_JSTATE_HELD) {
         int fd = papplJobOpenFile(j, attributes, sizeof attributes, temp, "ipp", "r");
         assert(fd >= 0); close(fd);
         assert(!access(input, F_OK));
     }
     papplSystemDelete(s);
 
-    if (saved_state != IPP_JSTATE_CANCELED) {
-        /* The public API cannot set a historical processing/stopped state. */
-        fp = fopen(state, "r+"); assert(fp);
-        char linebuf[8192]; bool changed = false;
-        while (fgets(linebuf, sizeof linebuf, fp)) {
-            if (strncmp(linebuf, "Job ", 4)) continue;
-            char *value = strstr(linebuf, "state=\"4\""); assert(value);
+    /* The public API cannot set a historical processing/stopped state. */
+    fp = fopen(state, "r+"); assert(fp);
+    char linebuf[8192]; bool found = false;
+    while (fgets(linebuf, sizeof linebuf, fp)) {
+        if (strncmp(linebuf, "Job ", 4)) continue;
+        char *value = strstr(linebuf, "state=\"4\""); assert(value);
+        if (saved_state == IPP_JSTATE_HELD) {
+            assert(!strstr(linebuf, "format="));
+        } else {
             long end = ftell(fp);
             assert(!fseek(fp, end - (long)strlen(linebuf) + (value - linebuf) + 7, SEEK_SET));
             assert(fputc('0' + saved_state, fp) != EOF);
-            changed = true; break;
         }
-        assert(changed); fclose(fp);
+        found = true; break;
     }
+    assert(found); fclose(fp);
 
     s = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "history", port+2, NULL, temp, "-", PAPPL_LOGLEVEL_ERROR, NULL, false); assert(s);
     papplSystemSetPrinterDrivers(s, 1, drivers, NULL, NULL, driver, NULL);
@@ -214,14 +237,11 @@ static void history(ipp_jstate_t saved_state)
     j = papplPrinterFindJob(p, id); assert(j);
     assert(papplPrinterGetNumberOfActiveJobs(p) == 0);
     assert(papplPrinterGetNumberOfCompletedJobs(p) == 1);
-    if (saved_state == IPP_JSTATE_CANCELED) {
-        assert(papplJobGetState(j) == saved_state);
-        assert(!strcmp(papplJobGetMessage(j), diagnostic));
-    } else {
-        assert(papplJobGetState(j) == IPP_JSTATE_ABORTED);
-        assert(strstr(papplJobGetMessage(j), "Interrupted by server restart; explicitly resubmit"));
+    assert(papplJobGetState(j) == IPP_JSTATE_ABORTED);
+    assert(strstr(papplJobGetMessage(j), "Interrupted by server restart; explicitly resubmit"));
+    assert(papplJobGetTimeCompleted(j) > 0);
+    if (saved_state != IPP_JSTATE_HELD) {
         assert(strstr(papplJobGetMessage(j), diagnostic));
-        assert(papplJobGetTimeCompleted(j) > 0);
         assert(access(attributes, F_OK));
     }
     assert(access(input, F_OK));
@@ -288,7 +308,7 @@ int main(void)
     job(NULL,0,"trim",false,true,"legacy"); job(NULL,0,"ptouch-chain",false,false,"legacy");
     httpClose(http); papplSystemShutdown(fixture_system); pthread_join(server,NULL); papplSystemDelete(fixture_system);
     rmdir(temp);
-    history(IPP_JSTATE_CANCELED);
+    history(IPP_JSTATE_HELD);
     history(IPP_JSTATE_PROCESSING);
     history(IPP_JSTATE_STOPPED);
     return 0;

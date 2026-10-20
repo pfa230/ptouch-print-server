@@ -81,7 +81,22 @@
  	  const char	*job_name,	// Job name
  			*job_id,	// Job ID
  			*job_username,	// Job username
-@@ -368,40 +367,23 @@
+@@ -332,12 +331,13 @@
+ 
+ 	  num_options = cupsParseOptions(value, /*end*/NULL, 0, &options);
+ 
+-	  if ((job_id = cupsGetOption("id", num_options, options)) == NULL || strtol(job_id, NULL, 10) <= 0 || (job_name = cupsGetOption("name", num_options, options)) == NULL || (job_username = cupsGetOption("username", num_options, options)) == NULL || (job_format = cupsGetOption("format", num_options, options)) == NULL)
++	  if ((job_id = cupsGetOption("id", num_options, options)) == NULL || strtol(job_id, NULL, 10) <= 0 || (job_name = cupsGetOption("name", num_options, options)) == NULL || (job_username = cupsGetOption("username", num_options, options)) == NULL)
+ 	  {
+ 	    papplLog(system, PAPPL_LOGLEVEL_ERROR, "Bad Job definition on line %d of '%s'.", linenum, filename);
+ 	    break;
+ 	  }
+ 
++	  job_format = cupsGetOption("format", num_options, options);
+ 	  if ((job = _papplJobCreate(printer, (int)strtol(job_id, NULL, 10), job_username, job_format, job_name, NULL)) == NULL)
+ 	  {
+ 	    papplLog(system, PAPPL_LOGLEVEL_ERROR, "Error creating job %s for printer %s", job_name, printer->name);
+@@ -368,40 +368,23 @@
  	  if ((job_value = cupsGetOption("imcompleted", num_options, options)) != NULL)
  	    job->impcompleted = (int)strtol(job_value, NULL, 10);
  
@@ -137,7 +152,7 @@
  	}
  	else
  	  papplLog(system, PAPPL_LOGLEVEL_WARN, "Unknown printer directive '%s' on line %d of '%s'.", line, linenum, filename);
-@@ -613,6 +595,8 @@
+@@ -613,6 +596,8 @@
        num_options = cupsAddOption("username", job->username, num_options, &options);
        num_options = cupsAddOption("format", job->format, num_options, &options);
  

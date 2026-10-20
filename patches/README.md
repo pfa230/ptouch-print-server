@@ -130,7 +130,9 @@ shows the decode failure and a job canceled before receiving data shows
 
 The same patch extends `pappl/system-loadsave.c` to save an optional message in
 its existing Job record with PAPPL option escaping and to restore it as literal
-text. All restored nonterminal jobs, including stopped jobs, become aborted
+text. Job records without a document format are accepted, retaining jobs
+canceled before receiving data and restoring unfinished jobs awaiting data.
+All restored nonterminal jobs, including stopped jobs, become aborted
 completed history with an interruption/resubmission message and any saved
 diagnostic. Existing cleanup removes their document and attribute files before
 scheduling; no active jobs or printer run state are restored. This applies to
@@ -138,14 +140,18 @@ all drivers in the bundled library; the application registers only
 `brother_ptouch`. Existing job IDs, next-job numbering and retention remain
 PAPPL's responsibility. No history database or public API is added.
 
-`test_pappl_finishings` also checks message roundtrips with quotes and percent
-signs and processing/stopped records with surviving inputs, zero active jobs,
-and no device connection. The image smoke replaces the actual container using
-one mounted directory and checks terminal history through IPP and web pages,
-no retained payloads, advancing IDs, and preserved state on identity conflict.
+`test_pappl_finishings` also checks processing/stopped records with surviving
+inputs and an unfinished job awaiting data saved without a format: each returns
+as aborted history with its interruption/resubmission message, zero active jobs,
+and no device connection. Saved diagnostics are appended to the message.
+The image smoke replaces the actual container using one mounted directory and
+checks terminal history through IPP and web pages, including a job canceled
+before receiving data saved without a format, and preserved state on identity
+conflict.
 
 Remove this patch when a pinned upstream release lists jobs on the multi-queue
-landing page, renders and persists `job-state-message`, and passes these
+landing page, renders and persists `job-state-message`, accepts records without a document
+format, and passes these
 history-only restoration checks without the correction.
 
 ## PAPPL printer operations and printing authorization

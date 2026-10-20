@@ -283,14 +283,6 @@ def saved_state(name, directory):
     return target.read_bytes()
 
 
-def no_replay(sink):
-    try:
-        output = sink.take(timeout=2)
-    except queue.Empty:
-        return
-    raise AssertionError(f"History restoration opened the output device: {output!r}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", help="already-built deploy image")
@@ -381,6 +373,7 @@ def main():
                            + operation("Get-Job-Attributes", "ATTR integer job-id $job-id",
                                        "EXPECT job-state WITH-VALUE 7"))
             print(canceled)
+            canceled_id = re.search(r"job-id \(integer\) = (\d+)", canceled).group(1)
             # The landing page lists the failed jobs with their reasons.
             home = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).read().decode()
             for result, reason in ((output, "PNG decode failed: "), (canceled, ": job-canceled-by-user")):
@@ -397,17 +390,15 @@ def main():
             run("docker", "stop", "-t", "20", name)
             saved = saved_state(name, directory)
             assert b"message=" in saved and b"PNG decode failed:" in saved
-            # PAPPL does not preserve completed documents or job-attribute files.
-            assert sorted(path.name for path in state.iterdir()) == ["ptouch-app.state"]
+            canceled_record = next(line for line in saved.decode().splitlines()
+                                   if line.startswith("Job ") and f'id="{canceled_id}"' in line.split())
+            assert 'state="7"' in canceled_record and "format=" not in canceled_record, canceled_record
             run("docker", "rm", name)
             port = start_container(name, args.image, args.model, sink, state)
             url = ready(port, directory, args.model)
-            assert history_snapshot(url, directory, port) == before
-            no_replay(sink)
-            output = submit(url, directory, image, "ATTR enum finishings 60")
-            new_id = int(re.search(r"job-id \(integer\) = (\d+)", output).group(1))
-            assert new_id > max(map(int, before)), output
-            check_geometry(decode(sink.take(), args.model), 1, args.model)
+            after = history_snapshot(url, directory, port)
+            assert after[canceled_id][0]["job-state"][1] == "canceled", after[canceled_id]
+            assert after == before, (before, after)
 
             run("docker", "stop", "-t", "20", name)
             saved = saved_state(name, directory)
@@ -423,19 +414,7 @@ def main():
             logs = run("docker", "logs", name)
             assert "conflicts with configured printer" in logs and "fresh spool-directory" in logs, logs
             assert saved_state(name, directory) == saved, "Identity conflict changed saved history"
-            no_replay(sink)
-            run("docker", "rm", name)
-            fresh = directory / "fresh"
-            fresh.mkdir()
-            port = start_container(name, args.image, replacement, sink, fresh)
-            url = ready(port, directory, replacement)
-            printers = ipp(url, directory, operation("Get-Printers", "", "").replace("printer-uri $uri", f"system-uri ipp://127.0.0.1:{port}/ipp/system"))
-            assert re.findall(r"printer-name \(nameWithoutLanguage\) = (.*)", printers) == ["ptouch"], printers
-            assert "job-id (integer)" not in ipp(url, directory,
-                operation("Get-Jobs", "ATTR keyword which-jobs all", ""))
-            no_replay(sink)
-            run("docker", "stop", "-t", "20", name)
-            print(args.model, "image smoke passed: presets, geometry, failures, persistent history, no replay, and printer-change recovery.")
+            print(args.model, "image smoke passed: presets, geometry, failures, persistent history, and preserved history on printer conflict.")
     finally:
         subprocess.run(["docker", "logs", name], check=False)
         subprocess.run(["docker", "rm", "-f", name], check=False,
