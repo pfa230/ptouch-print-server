@@ -44,7 +44,7 @@ Leaving the native loader unchanged can replay a surviving document. Relying on 
 
 ### 4. Verify the real startup path using the existing image smoke
 
-Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads. Recreate the container with a conflicting configured printer identity against the same directory; verify startup fails without changing the saved state file or its job history, then verify the replacement configuration starts with fresh storage.
+Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, and exactly one configured queue after recreation. Recreate the container with a conflicting configured printer identity against the same directory; verify startup fails without changing the saved state file or its job history, then verify the replacement configuration starts with fresh storage.
 
 Add focused pinned-library coverage for restoring an unfinished job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses. The image smoke's existing job canceled before receiving data covers both absent optional message and absent `format`; assert that it survives recreation as canceled history. Extend the focused state fixtures with an unfinished job awaiting data whose saved record has no `format`; verify it restores as aborted history with the interruption/resubmission message, no active entry, and no device output. No separate legacy fixture is needed.
 
@@ -71,6 +71,10 @@ Removed from the candidate approach:
 - A new public history-only loader mode and driver-name restriction: the bundled loader has no concrete native-resumption consumer to protect.
 - A legacy-record fixture and generic-driver restoration regression: the canceled-job smoke covers absent messages, and no existing fixture relies on native nonterminal restoration.
 - A separate startup/history test harness: the image smoke already starts the real app, submits representative jobs, captures output and reads web rows.
+
+- An advancing-new-job-ID smoke assertion: pinned PAPPL already saves and restores `NextJobId`; no observed failure justifies an additional check.
+- A zero-replay image-smoke assertion: the smoke recreates the container only after terminal jobs; the unfinished-job fixtures already exercise the native active-job restoration path and assert no device output.
+- A terminal-document-payload smoke assertion: completed-document retention is already disabled, with no demonstrated failure requiring another check.
 
 Kept items, each with its contract and the failure of the smaller alternative:
 
@@ -117,9 +121,9 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Awaiting-data restoration fixture: interrupted-history requirement; processing/stopped fixtures with present inputs do not exercise the loader's rejection before nonterminal normalization when `format` is absent.
 - Processing/stopped restoration fixtures with present inputs: interrupted-history requirement; the native loader treats STOPPED differently from earlier states.
 - Real-app image replacement smoke: persistent history scenario; isolated save/load cannot expose the app's create-before-load defect.
-- One-queue and advancing-ID assertions in that smoke: existing stable queue and native identity; history text alone can pass despite duplicate queues or ID reuse.
+- One-queue assertion in that smoke: existing single-queue contract; the app currently creates the queue before loading saved printers, causing the duplicate-printer failure.
 - IPP/web message assertions in that smoke: existing visible-history clauses plus durability; file contents alone do not establish that users see the restored explanation.
-- Zero-output assertion: existing conservative recovery; visible aborted history alone does not establish that restoration never dispatched its input.
+- No-device-output assertion in focused unfinished-job fixtures: interrupted-history requirement and existing conservative recovery; the native loader can place surviving inputs in `active_jobs`, so visible aborted history alone does not establish that restoration never dispatched its input.
 - Full build/CTest and both model image smokes: project-required adapter verification; core-only checks never execute application startup or pinned PAPPL state code.
 - New-card service/example changes: persistent deployment sentence; updating only the app still leaves an unmounted state file.
 - Installed-Pi migration documentation: explicit requested Pi fix; a cloud-init template update never changes the already installed systemd unit.
