@@ -3,7 +3,7 @@
 ## 1. Preserve diagnostic metadata safely
 
 - [ ] 1.1 Extend the existing pinned PAPPL job-history patch to save/load optional message text and restore all unfinished jobs as aborted completed history, removing their input files before scheduling; verify message roundtrips (including quotes and percent signs) and saved processing/stopped jobs with surviving inputs in focused state fixtures based on `tests/test_pappl_finishings.c`, with no active jobs or device output.
-- [ ] 1.2 Update `patches/README.md` for the correction's scope and removal criteria; verify strict patch application in both existing Docker build paths.
+- [x] 1.2 Update `patches/README.md` for the correction's scope and removal criteria; verify strict patch application in both existing Docker build paths.
 
 ## 2. Load before creating the queue
 
@@ -13,7 +13,7 @@
 ## 3. Retain state outside the container
 
 - [ ] 3.1 Set the image entrypoint's existing spool-directory option to `/var/lib/ptouch` and bind `/data/ptouch/state` there in `deploy/pi/user-data`; add matching persistent mounts to the USB Compose and manual Bluetooth examples. Verify the rendered service creates/uses the directory on `/data`, matches the image path, and retains existing host networking, journald and USB settings; the image smoke must exercise this entrypoint.
-- [ ] 3.2 Document the installed-Pi service migration, intentional printer-change procedure (stop, move old state aside, create fresh storage, reconfigure/pair, start), last-successful-save limitation, lack of backfill, and rollback in `docs/PI-DEPLOYMENT.md`; update `ptouch-pair` output to report pairing/configuration success accurately and point to the recovery for changed printers. Review commands against the read-only-root maintenance procedure and distinguish application history from journal logs and printer run state.
+- [x] 3.2 Document the installed-Pi service migration, intentional printer-change procedure (stop, move old state aside, create fresh storage, reconfigure/pair, start), last-successful-save limitation, lack of backfill, and rollback in `docs/PI-DEPLOYMENT.md`; update `ptouch-pair` output to report pairing/configuration success accurately and point to the recovery for changed printers. Review commands against the read-only-root maintenance procedure and distinguish application history from journal logs and printer run state.
 
 ## 4. Integration verification
 

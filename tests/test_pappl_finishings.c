@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +158,85 @@ static void roundtrip(const char *directory, int value, const char *name)
     assert(named_count(attrs,"finishings-default") == 1 && named_count(attrs,"finishings-col-default") == 1);
     ippDelete(attrs); papplSystemDelete(loaded); unlink(state);
 }
+/* Exercise the pinned loader with surviving input, including its STOPPED boundary. */
+static void history(ipp_jstate_t saved_state)
+{
+    char temp[] = "/tmp/pappl-history-XXXXXX"; assert(mkdtemp(temp));
+    char state[512], input[512], attributes[512], uri[128];
+    snprintf(state, sizeof state, "%s/state", temp);
+    snprintf(input, sizeof input, "%s/input.png", temp);
+    FILE *fp = fopen(input, "w"); assert(fp); fputs("saved document", fp); fclose(fp);
+
+    int sink = socket(AF_INET, SOCK_STREAM, 0); assert(sink >= 0);
+    struct sockaddr_in address = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    assert(!bind(sink, (struct sockaddr *)&address, sizeof address));
+    socklen_t size = sizeof address; assert(!getsockname(sink, (struct sockaddr *)&address, &size));
+    assert(!listen(sink, 1));
+    snprintf(uri, sizeof uri, "socket://127.0.0.1:%d", ntohs(address.sin_port));
+    pappl_pr_driver_t drivers[] = {{"preset", "Preset", NULL, NULL}};
+    pappl_system_t *s = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "history", port+2, NULL, temp, "-", PAPPL_LOGLEVEL_ERROR, NULL, false); assert(s);
+    papplSystemSetPrinterDrivers(s, 1, drivers, NULL, NULL, driver, NULL);
+    pappl_printer_t *p = papplPrinterCreate(s, 0, "test", "preset", "MFG:Test;MDL:Fixture;", uri); assert(p);
+    assert(papplPrinterHoldNewJobs(p));
+    pappl_job_t *j = papplJobCreateWithFile(p, "history-owner", "image/png", "saved-input", 0, NULL, input); assert(j);
+    assert(papplJobGetState(j) == IPP_JSTATE_HELD);
+    const char *diagnostic = "Decode \"quoted\" input at 50%; literal %s and %n";
+    papplJobSetMessage(j, "%s", diagnostic);
+    int id = papplJobGetID(j);
+    if (saved_state == IPP_JSTATE_CANCELED) papplJobCancel(j);
+    assert(papplSystemSaveState(s, state));
+    if (saved_state != IPP_JSTATE_CANCELED) {
+        int fd = papplJobOpenFile(j, attributes, sizeof attributes, temp, "ipp", "r");
+        assert(fd >= 0); close(fd);
+        assert(!access(input, F_OK));
+    }
+    papplSystemDelete(s);
+
+    if (saved_state != IPP_JSTATE_CANCELED) {
+        /* The public API cannot set a historical processing/stopped state. */
+        fp = fopen(state, "r+"); assert(fp);
+        char linebuf[8192]; bool changed = false;
+        while (fgets(linebuf, sizeof linebuf, fp)) {
+            if (strncmp(linebuf, "Job ", 4)) continue;
+            char *value = strstr(linebuf, "state=\"4\""); assert(value);
+            long end = ftell(fp);
+            assert(!fseek(fp, end - (long)strlen(linebuf) + (value - linebuf) + 7, SEEK_SET));
+            assert(fputc('0' + saved_state, fp) != EOF);
+            changed = true; break;
+        }
+        assert(changed); fclose(fp);
+    }
+
+    s = papplSystemCreate(PAPPL_SOPTIONS_MULTI_QUEUE, "history", port+2, NULL, temp, "-", PAPPL_LOGLEVEL_ERROR, NULL, false); assert(s);
+    papplSystemSetPrinterDrivers(s, 1, drivers, NULL, NULL, driver, NULL);
+    assert(papplSystemLoadState(s, state));
+    p = papplSystemFindPrinter(s, "/ipp/print/test", 0, NULL); assert(p);
+    j = papplPrinterFindJob(p, id); assert(j);
+    assert(papplPrinterGetNumberOfActiveJobs(p) == 0);
+    assert(papplPrinterGetNumberOfCompletedJobs(p) == 1);
+    if (saved_state == IPP_JSTATE_CANCELED) {
+        assert(papplJobGetState(j) == saved_state);
+        assert(!strcmp(papplJobGetMessage(j), diagnostic));
+    } else {
+        assert(papplJobGetState(j) == IPP_JSTATE_ABORTED);
+        assert(strstr(papplJobGetMessage(j), "Interrupted by server restart; explicitly resubmit"));
+        assert(strstr(papplJobGetMessage(j), diagnostic));
+        assert(papplJobGetTimeCompleted(j) > 0);
+        assert(access(attributes, F_OK));
+    }
+    assert(access(input, F_OK));
+    assert(papplPrinterReleaseHeldNewJobs(p, NULL));
+    assert(papplSystemAddListeners(s, "localhost"));
+    pthread_t server; assert(!pthread_create(&server, NULL, run, s));
+    struct pollfd listener = {.fd = sink, .events = POLLIN};
+    assert(poll(&listener, 1, 1100) == 0); /* No device connection or replay. */
+    papplSystemShutdown(s);
+    /* Wake PAPPL's idle listener poll so each fixture need not wait 30 seconds. */
+    http_t *wake = httpConnect2("localhost", port+2, NULL, AF_UNSPEC, HTTP_ENCRYPTION_NEVER, 1, 3000, NULL);
+    httpClose(wake);
+    pthread_join(server, NULL); papplSystemDelete(s);
+    close(sink); unlink(state); rmdir(temp);
+}
 static void copies(const char *format, int number, bool success)
 {
     ipp_t *q = request(IPP_OP_VALIDATE_JOB, "test");
@@ -207,5 +287,9 @@ int main(void)
     job(one+1,1,NULL,false,true,"legacy"); job(one+2,1,NULL,false,false,"legacy");
     job(NULL,0,"trim",false,true,"legacy"); job(NULL,0,"ptouch-chain",false,false,"legacy");
     httpClose(http); papplSystemShutdown(fixture_system); pthread_join(server,NULL); papplSystemDelete(fixture_system);
-    rmdir(temp); return 0;
+    rmdir(temp);
+    history(IPP_JSTATE_CANCELED);
+    history(IPP_JSTATE_PROCESSING);
+    history(IPP_JSTATE_STOPPED);
+    return 0;
 }

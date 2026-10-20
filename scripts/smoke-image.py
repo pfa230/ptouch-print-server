@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the deploy image through IPP and a socket sink, without USB access."""
 import argparse
+import html
 import json
 from pathlib import Path
 import queue
@@ -216,6 +217,80 @@ def submit(url, directory, file, finishing="", copies=1, state=9, media="om_12x5
     return ipp(url, directory, request)
 
 
+def start_container(name, image, model, sink, state):
+    run("docker", "run", "-d", "--name", name,
+        "--mount", f"type=bind,src={state},dst=/var/lib/ptouch",
+        "--add-host", "host.docker.internal:host-gateway",
+        "-p", "127.0.0.1::8000", "-e",
+        f"PTOUCH_DEVICE_URI=socket://host.docker.internal:{sink.port}",
+        "-e", f"PTOUCH_MODEL={model}", image)
+    mapping = json.loads(run("docker", "inspect", "--format",
+                             "{{json .NetworkSettings.Ports}}", name))
+    return mapping['8000/tcp'][0]['HostPort']
+
+
+def ready(port, directory, model):
+    url = f"ipp://127.0.0.1:{port}/ipp/print/ptouch"
+    request = operation("Get-Printer-Attributes", "",
+                        f'EXPECT printer-make-and-model WITH-VALUE "Brother {model}"')
+    for attempt in range(20):
+        try:
+            ipp(url, directory, request)
+            return url
+        except RuntimeError:
+            if attempt == 19:
+                raise
+            time.sleep(1)
+
+
+def history_snapshot(url, directory, port):
+    # Absolute dates survive a new printer uptime; relative time-at-* does not.
+    fields = ("job-id", "job-name", "job-originating-user-name",
+              "date-time-at-creation", "date-time-at-processing", "date-time-at-completed",
+              "job-impressions", "job-impressions-completed",
+              "job-state", "job-state-reasons", "job-state-message")
+    jobs = ipp(url, directory, operation("Get-Jobs", "ATTR keyword which-jobs all", ""))
+    ids = re.findall(r"job-id \(integer\) = (\d+)", jobs)
+    assert ids, jobs
+    # Get-Printers must expose exactly the configured queue after loading.
+    printers = ipp(url, directory, operation("Get-Printers", "", "").replace("printer-uri $uri", f"system-uri ipp://127.0.0.1:{port}/ipp/system"))
+    assert re.findall(r"printer-name \(nameWithoutLanguage\) = (.*)", printers) == ["ptouch"], printers
+    pages = [urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10).read().decode()
+             for path in ("/", "/ptouch/jobs")]
+    result = {}
+    for job_id in ids:
+        output = ipp(url, directory, operation("Get-Job-Attributes",
+                     f"ATTR integer job-id {job_id}\n  ATTR keyword requested-attributes {','.join(fields)}", ""))
+        attrs = {key: (kind, value) for key, kind, value in
+                 re.findall(r"^\s+([\w-]+) \(([^)]+)\)(?: = (.*))?$", output, re.M)
+                 if key in fields}
+        assert set(attrs) == set(fields), output
+        rows = []
+        for page in pages:
+            row = re.search(rf"<tr><td>{job_id}</td>.*?</tr>", page, re.S)
+            assert row, (job_id, page)
+            rows.append(html.unescape(row.group(0)))
+        if attrs["job-state"][1] == "aborted":
+            assert all(attrs["job-state-message"][1] in row for row in rows), (attrs, rows)
+        result[job_id] = (attrs, rows)
+    return result
+
+
+def saved_state(name, directory):
+    # docker cp also works after the identity-conflict container has exited.
+    target = directory / "saved.state"
+    run("docker", "cp", f"{name}:/var/lib/ptouch/ptouch-app.state", str(target))
+    return target.read_bytes()
+
+
+def no_replay(sink):
+    try:
+        output = sink.take(timeout=2)
+    except queue.Empty:
+        return
+    raise AssertionError(f"History restoration opened the output device: {output!r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", help="already-built deploy image")
@@ -225,17 +300,12 @@ def main():
     name = "ptouch-smoke-" + uuid.uuid4().hex[:10]
     sink = Sink()
     try:
-        run("docker", "run", "-d", "--name", name,
-            "--add-host", "host.docker.internal:host-gateway",
-            "-p", "127.0.0.1::8000", "-e",
-            f"PTOUCH_DEVICE_URI=socket://host.docker.internal:{sink.port}",
-            "-e", f"PTOUCH_MODEL={args.model}", args.image)
-        mapping = json.loads(run("docker", "inspect", "--format",
-                                 "{{json .NetworkSettings.Ports}}", name))
-        port = mapping['8000/tcp'][0]['HostPort']
-        url = f"ipp://127.0.0.1:{port}/ipp/print/ptouch"
         with tempfile.TemporaryDirectory(prefix="ptouch-smoke-") as temp:
             directory = Path(temp)
+            state = directory / "state"
+            state.mkdir()
+            port = start_container(name, args.image, args.model, sink, state)
+            url = ready(port, directory, args.model)
             image = directory / "label.png"
             png(image)
             attributes = operation("Get-Printer-Attributes",
@@ -247,14 +317,7 @@ def main():
   EXPECT finishing-template-supported WITH-VALUE ptouch-chain
   EXPECT document-format-supported WITH-VALUE image/png WITH-DISTINCT-VALUES
   EXPECT document-format-supported WITH-ALL-VALUES "/^(application/octet-stream|image/(pwg-raster|urf|png|jpeg))$/"'''.replace("MODEL", args.model))
-            for attempt in range(20):
-                try:
-                    print(ipp(url, directory, attributes))
-                    break
-                except RuntimeError:
-                    if attempt == 19:
-                        raise
-                    time.sleep(1)
+            print(ipp(url, directory, attributes))
             cases = (
                 ("default", "", [True] * 3, True, 1),
                 ("none", "ATTR enum finishings 3", [True, False, False], False, 1),
@@ -330,7 +393,49 @@ def main():
             result = summary(commands)
             assert result["init"] == 0 and result["eject"] == 1, result
             assert len(result["pages"]) == 1 and not result["terminal_commands_after_pages"], result
-            print(args.model, "image smoke passed: four presets, synchronized defaults, geometry, copies, and input failure.")
+            before = history_snapshot(url, directory, port)
+            run("docker", "stop", "-t", "20", name)
+            saved = saved_state(name, directory)
+            assert b"message=" in saved and b"PNG decode failed:" in saved
+            # PAPPL does not preserve completed documents or job-attribute files.
+            assert sorted(path.name for path in state.iterdir()) == ["ptouch-app.state"]
+            run("docker", "rm", name)
+            port = start_container(name, args.image, args.model, sink, state)
+            url = ready(port, directory, args.model)
+            assert history_snapshot(url, directory, port) == before
+            no_replay(sink)
+            output = submit(url, directory, image, "ATTR enum finishings 60")
+            new_id = int(re.search(r"job-id \(integer\) = (\d+)", output).group(1))
+            assert new_id > max(map(int, before)), output
+            check_geometry(decode(sink.take(), args.model), 1, args.model)
+
+            run("docker", "stop", "-t", "20", name)
+            saved = saved_state(name, directory)
+            run("docker", "rm", name)
+            replacement = "PT-P710BT" if args.model == "PT-2730" else "PT-2730"
+            start_container(name, args.image, replacement, sink, state)
+            for attempt in range(20):
+                status = json.loads(run("docker", "inspect", "--format", "{{json .State}}", name))
+                if not status["Running"]:
+                    break
+                time.sleep(1)
+            assert not status["Running"] and status["ExitCode"] != 0, status
+            logs = run("docker", "logs", name)
+            assert "conflicts with configured printer" in logs and "fresh spool-directory" in logs, logs
+            assert saved_state(name, directory) == saved, "Identity conflict changed saved history"
+            no_replay(sink)
+            run("docker", "rm", name)
+            fresh = directory / "fresh"
+            fresh.mkdir()
+            port = start_container(name, args.image, replacement, sink, fresh)
+            url = ready(port, directory, replacement)
+            printers = ipp(url, directory, operation("Get-Printers", "", "").replace("printer-uri $uri", f"system-uri ipp://127.0.0.1:{port}/ipp/system"))
+            assert re.findall(r"printer-name \(nameWithoutLanguage\) = (.*)", printers) == ["ptouch"], printers
+            assert "job-id (integer)" not in ipp(url, directory,
+                operation("Get-Jobs", "ATTR keyword which-jobs all", ""))
+            no_replay(sink)
+            run("docker", "stop", "-t", "20", name)
+            print(args.model, "image smoke passed: presets, geometry, failures, persistent history, no replay, and printer-change recovery.")
     finally:
         subprocess.run(["docker", "logs", name], check=False)
         subprocess.run(["docker", "rm", "-f", name], check=False,

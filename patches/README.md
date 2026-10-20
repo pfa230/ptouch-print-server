@@ -110,7 +110,8 @@ upgrade must revalidate both patches and their exact application.
 ## PAPPL job history and failure reasons
 
 Both image builds apply `pappl-1.4.11-job-history.patch` after the finishing
-patch, with the same strict patch flags. It changes only `pappl/printer-webif.c`.
+patch, with the same strict patch flags. Its display changes are in
+`pappl/printer-webif.c`.
 In multi-queue mode the stock landing page `/` shows each printer's status card
 and active-job count but no jobs, and no page renders a job's
 `job-state-message`. A failed job therefore appeared only as "Aborted <time>",
@@ -127,8 +128,25 @@ changes. The deploy-image smoke checks that, on `/`, its malformed-PNG job's row
 shows the decode failure and a job canceled before receiving data shows
 `job-canceled-by-user`.
 
+The same patch extends `pappl/system-loadsave.c` to save an optional message in
+its existing Job record with PAPPL option escaping and to restore it as literal
+text. All restored nonterminal jobs, including stopped jobs, become aborted
+completed history with an interruption/resubmission message and any saved
+diagnostic. Existing cleanup removes their document and attribute files before
+scheduling; no active jobs or printer run state are restored. This applies to
+all drivers in the bundled library; the application registers only
+`brother_ptouch`. Existing job IDs, next-job numbering and retention remain
+PAPPL's responsibility. No history database or public API is added.
+
+`test_pappl_finishings` also checks message roundtrips with quotes and percent
+signs and processing/stopped records with surviving inputs, zero active jobs,
+and no device connection. The image smoke replaces the actual container using
+one mounted directory and checks terminal history through IPP and web pages,
+no retained payloads, advancing IDs, and preserved state on identity conflict.
+
 Remove this patch when a pinned upstream release lists jobs on the multi-queue
-landing page and renders `job-state-message`.
+landing page, renders and persists `job-state-message`, and passes these
+history-only restoration checks without the correction.
 
 ## PAPPL printer operations and printing authorization
 
