@@ -19,11 +19,3 @@
 
 - [x] 4.1 Run the full `cmake -S . -B build`, `cmake --build build`, and `ctest --test-dir build --output-on-failure` with pinned patched dependencies, build `Dockerfile.deploy`, run its image smoke for PT-2730 and PT-P710BT, and run `openspec validate --all --strict --no-interactive`; record results as software/container evidence, with real Pi reboot persistence requiring separately authorized deployment validation.
 
-## Verification evidence (2026-10-20)
-
-- Software/container evidence on linux/amd64: `Dockerfile` and `Dockerfile.deploy` built with the pinned patched dependencies and strict patch application.
-- In the development container, `cmake -S . -B build`, `cmake --build build`, and `ctest --test-dir build --output-on-failure` passed all 15 tests. The deploy build also passed all 15 tests, including awaiting-data, processing, and stopped history restoration.
-- `scripts/smoke-image.py ptouch-history-deploy --model PT-2730` and the corresponding PT-P710BT run passed through the image entrypoint: one restored queue, unchanged IPP/web history, canceled-before-data history saved without `format`, and a failing identity conflict that preserves the state file.
-- Rendered Pi service and USB Compose settings were checked for persistent paths, `/data` mount ordering, and retained network, journald, nofile, and USB settings; migration commands were reviewed against the read-only-root maintenance procedure.
-- `openspec validate --all --strict --no-interactive` passed all 6 items; `git diff --check` passed.
-- No live Pi deployment or physical printer validation was performed. Real Pi reboot persistence requires separately authorized deployment validation.
