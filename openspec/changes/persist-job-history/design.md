@@ -34,7 +34,7 @@ Using only a volume leaves the duplicate-printer failure. Loading after creating
 
 ### 3. Extend the existing bounded job-history correction
 
-Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. The field is optional because current jobs such as canceled jobs can have no message; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery.
+Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. The field is optional because current jobs such as canceled jobs can have no message; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery. Include the pre-existing loader correction for Job records without `format`: PAPPL saves jobs canceled before receiving data and unfinished jobs awaiting data without this field, but its loader currently logs "Bad Job definition" and drops them. Accept an absent document format so canceled jobs retain their terminal history and unfinished jobs reach the normalization below.
 
 Normalize every restored nonterminal job, including stopped jobs, to aborted completed history before it can enter `active_jobs`. Set an interruption/resubmission message, appending any saved diagnostic, set completion metadata, and remove its no-longer-printable spool files through existing cleanup operations. Do not restore driver run state or issue device commands. Update `patches/README.md` with this scope and removal criteria; both Dockerfiles already apply the same patch.
 
@@ -46,7 +46,7 @@ Leaving the native loader unchanged can replay a surviving document. Relying on 
 
 Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads. Recreate the container with a conflicting configured printer identity against the same directory; verify startup fails without changing the saved state file or its job history, then verify the replacement configuration starts with fresh storage.
 
-Add focused pinned-library coverage for restoring an unfinished job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses. The image smoke's existing message-less canceled job covers the absent optional message; no separate legacy fixture is needed.
+Add focused pinned-library coverage for restoring an unfinished job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses. The image smoke's existing job canceled before receiving data covers both absent optional message and absent `format`; assert that it survives recreation as canceled history. Extend the focused state fixtures with an unfinished job awaiting data whose saved record has no `format`; verify it restores as aborted history with the interruption/resubmission message, no active entry, and no device output. No separate legacy fixture is needed.
 
 Run the normal full CMake/CTest build with the pinned patched dependencies and the deploy-image smoke for both supported models. Core-only tests do not exercise startup or state restoration. A Pi reboot check can establish the real bind mount's persistence without printing; record it separately when a live deployment is authorized.
 
@@ -105,6 +105,7 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Existing page-count fields: saved metadata; omitting them loses recorded progress.
 - Existing terminal-state field: saved metadata; omitting it loses completed/aborted/canceled distinctions.
 - Existing reason-bit field: saved metadata and existing failure-reason fallback; omitting it leaves old/message-free records unexplained.
+- Optional document-format loading: saved canceled history and interrupted history; the existing loader rejects records without `format` as "Bad Job definition" and drops jobs canceled before receiving data or still awaiting data.
 - Optional message field: saved metadata and existing `Failed jobs show their reason`; current PAPPL serialization demonstrably omits the displayed text.
 - Existing option escaping and literal message restoration: exact saved message; raw token splitting or interpreting a diagnostic as a format string changes its text.
 - Nonterminal normalization: interrupted-history requirement and existing no-replay rule; native restoration can reactivate surviving documents, while a driver-name restriction has no concrete consumer to protect.
@@ -112,6 +113,8 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Input-file cleanup with existing disabled completed-document retention: existing PAPPL behavior and proposal boundary against archival; mounting the spool otherwise leaves interrupted payloads behind.
 - Existing retention limit: bounded history requirement; a second limit would add an unnecessary setting and differing eviction policy.
 - Escaped-message state fixture: saved metadata; the image's decoder-generated text cannot exercise deliberately chosen quotes and percent signs, while its canceled-job case already covers absent messages.
+- Canceled-before-data smoke assertion: saved terminal history; checking only jobs with documents misses the observed rejection of a saved canceled job without `format`.
+- Awaiting-data restoration fixture: interrupted-history requirement; processing/stopped fixtures with present inputs do not exercise the loader's rejection before nonterminal normalization when `format` is absent.
 - Processing/stopped restoration fixtures with present inputs: interrupted-history requirement; the native loader treats STOPPED differently from earlier states.
 - Real-app image replacement smoke: persistent history scenario; isolated save/load cannot expose the app's create-before-load defect.
 - One-queue and advancing-ID assertions in that smoke: existing stable queue and native identity; history text alone can pass despite duplicate queues or ID reuse.
@@ -122,7 +125,7 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Installed-Pi migration documentation: explicit requested Pi fix; a cloud-init template update never changes the already installed systemd unit.
 - Patch scope/removal documentation: existing bounded dependency-correction requirement; undocumented new loader behavior cannot be safely reevaluated on a dependency update.
 - Last-save/backfill/rollback explanation: proposal's deployment documentation request; promising recovery of already deleted or unsaved records would be false.
-- Task 1.1: saved metadata and interrupted history; omitting it retains the loader's missing-message/replay behavior.
+- Task 1.1: saved metadata and interrupted history; omitting it retains the loader's missing-message/replay behavior and rejection of jobs without `format`.
 - Task 1.2: bounded dependency corrections; omitting it leaves scope/application unverified.
 - Task 2.1: history durability; omitting it retains duplicate-printer loss.
 - Task 2.2: visible durable history; omitting it leaves actual container recreation unverified.
