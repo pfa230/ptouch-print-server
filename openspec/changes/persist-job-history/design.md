@@ -26,7 +26,7 @@ A mounted spool also temporarily retains unfinished document and attribute files
 
 ### 2. Take ownership of save/load order through PAPPL APIs
 
-After registering the transport, driver, operation callback, and PNG filter, register `papplSystemSetSaveCallback` and load the selected file before creating a queue. A registered save callback suppresses the mainloop's later automatic load. Reuse the restored `ptouch` queue; create it only on a fresh state directory. Keep the existing configuration authoritative: a saved queue that conflicts with the configured supported model or resolved transport URI must fail startup clearly rather than select a different device. Do not duplicate queue-creation paths for restoration.
+After registering the transport, driver, operation callback, and PNG filter, register `papplSystemSetSaveCallback` and load the selected file before creating a queue. A registered save callback suppresses the mainloop's later automatic load. Reuse the restored `ptouch` queue; create it when the loaded state has no `ptouch` queue. Keep the existing configuration authoritative: a saved queue that conflicts with the configured supported model or resolved transport URI must fail startup clearly rather than select a different device. Do not duplicate queue-creation paths for restoration.
 
 Using only a volume leaves the duplicate-printer failure. Loading after creating the queue has the same failure. Replacing the mainloop or adding a history parser is unnecessary because PAPPL exposes save/load and already permits a developer-supplied callback.
 
@@ -44,7 +44,7 @@ Leaving the native loader unchanged can replay a surviving document. Relying on 
 
 ### 4. Verify the real startup path using the existing image smoke
 
-Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads.
+Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads. Recreate the container with a conflicting configured printer identity against the same directory; verify startup fails without changing the saved state file or its job history, then verify the replacement configuration starts with fresh storage.
 
 Add focused pinned-library coverage for restoring an unfinished job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses. The image smoke's existing message-less canceled job covers the absent optional message; no separate legacy fixture is needed.
 
