@@ -30,13 +30,15 @@ After registering the transport, driver, operation callback, and PNG filter, reg
 
 Using only a volume leaves the duplicate-printer failure. Loading after creating the queue has the same failure. Replacing the mainloop or adding a history parser is unnecessary because PAPPL exposes save/load and already permits a developer-supplied callback.
 
-**Resolved review decision:** If configuration names a different model or transport URI, keep the existing choice to fail startup and preserve the saved directory. This follows this section's explicit conflict policy, the proposal's no-new-public-API boundary, and the requirement to preserve saved history rather than silently discard it. Do not retarget or automatically delete saved history. For an intentional printer change, the operator stops the service, moves the old `/data/ptouch/state` directory aside as an archive, creates a fresh directory at that path, then configures/pairs and starts the service again. Document the equivalent fresh-directory procedure for other deployments. The Pi pairing helper must describe pairing/configuration success accurately and point to this recovery when changing printers, rather than claim the server now prints regardless of its startup outcome. Preserve an archive until the operator chooses to remove it; no automatic archive manager or extra option is needed. Verify the mismatch leaves the prior state intact and that selecting fresh storage allows the newly configured queue to start.
+**Resolved review decision:** If configuration names a different model or transport URI, keep the existing choice to fail startup and preserve the saved history. This follows this section's explicit conflict policy and the requirement to preserve saved history rather than silently discard it; retargeting would add a public API beyond this design. Do not retarget or automatically delete saved history. For an intentional printer change, the operator stops the service, moves the old `/data/ptouch/state` directory aside as an archive, creates a fresh directory at that path, then configures/pairs and starts the service again. Document the equivalent fresh-directory procedure for other deployments. The Pi pairing helper must describe pairing/configuration success accurately and point to this recovery when changing printers, rather than claim the server now prints regardless of its startup outcome. Preserve an archive until the operator chooses to remove it; no automatic archive manager or extra option is needed. Verify the mismatch leaves the saved state file and its job history intact and that selecting fresh storage allows the newly configured queue to start. Interrupted input payloads can already have been removed by restoration before the identity check; they are not part of that preservation assertion.
 
 ### 3. Extend the existing bounded job-history correction
 
-Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. Older records with no message remain readable; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery.
+Extend `pappl-1.4.11-job-history.patch` to round-trip an optional message in PAPPL's existing Job record, using its existing option escaping and a literal format when restoring message text. The field is optional because current jobs such as canceled jobs can have no message; their existing reason-keyword fallback remains useful. Keep job numbers, next-job numbering, counts and retention under PAPPL's existing state machinery.
 
-For the existing `brother_ptouch` driver only, normalize every restored nonterminal job, including stopped jobs, to aborted completed history before it can enter `active_jobs`. Set an interruption/resubmission message, appending any saved diagnostic, set completion metadata, and remove its no-longer-printable spool files through existing cleanup operations. Do not restore driver run state or issue device commands. Other PAPPL fixture drivers keep their native restoration behavior. Update `patches/README.md` with this scope and removal criteria; both Dockerfiles already apply the same patch.
+Normalize every restored nonterminal job, including stopped jobs, to aborted completed history before it can enter `active_jobs`. Set an interruption/resubmission message, appending any saved diagnostic, set completion metadata, and remove its no-longer-printable spool files through existing cleanup operations. Do not restore driver run state or issue device commands. Update `patches/README.md` with this scope and removal criteria; both Dockerfiles already apply the same patch.
+
+**Resolved review decision:** Normalize all nonterminal jobs loaded by the bundled PAPPL, without a driver-name restriction or a generic-driver restoration regression. The application registers only `brother_ptouch`; no existing fixture consumes native nonterminal restoration. AGENTS.md's minimality rule therefore selects this smaller correction rather than adding a restriction and test for an unshown consumer.
 
 Leaving the native loader unchanged can replay a surviving document. Relying on missing spool files also fails: missing job attributes can leave a nonterminal record, and persisted files can enter the active queue. Calling the public cancel API after restoring a processing job leaves cancellation waiting for a worker that no longer exists. Normalizing inside the existing loader avoids another public mode or API.
 
@@ -44,7 +46,7 @@ Leaving the native loader unchanged can replay a surviving document. Relying on 
 
 Extend `scripts/smoke-image.py` to mount one temporary host directory and replace its test container against the same directory. Reuse its socket sink, IPP client, successful job, malformed-PNG failure, canceled job and web-row checks. Assert the same job IDs, fields, messages, exactly one configured queue and monotonically advancing new job IDs after recreation. Check that terminal jobs have no retained document payloads.
 
-Add focused pinned-library coverage for restoring an unfinished `brother_ptouch` job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses.
+Add focused pinned-library coverage for restoring an unfinished job with its document and attributes still present: it becomes aborted history, has no active entry, and emits no device output. Reuse the state-roundtrip fixture pattern in `tests/test_pappl_finishings.c`; include quoted text and percent signs in its message roundtrip, and cover a stopped saved state as well as a processing one because the native loader branches at STOPPED. This complements the actual app/container test, which catches the startup-order failure a loader-only test misses. The image smoke's existing message-less canceled job covers the absent optional message; no separate legacy fixture is needed.
 
 Run the normal full CMake/CTest build with the pinned patched dependencies and the deploy-image smoke for both supported models. Core-only tests do not exercise startup or state restoration. A Pi reboot check can establish the real bind mount's persistence without printing; record it separately when a live deployment is authorized.
 
@@ -52,7 +54,6 @@ Run the normal full CMake/CTest build with the pinned patched dependencies and t
 
 - **Last unsaved changes during power loss:** durability covers the last successful PAPPL save, not a new synchronous audit log; do not promise every job survives abrupt power removal.
 - **Saved unfinished work:** it returns as aborted history requiring explicit resubmission; preserving documents must not silently enable resumption.
-- **Older saved records:** optional message loading preserves compatibility, but missing historical message text cannot be reconstructed.
 - **Existing hardware run after restart:** history restoration does not establish printer readiness or recover a held/uncertain run; keep the existing recovery procedure.
 
 ## Migration Plan
@@ -67,7 +68,8 @@ Removed from the candidate approach:
 
 - A separate metadata-only directory and temporary-spool path: one mounted existing spool directory serves history durability and existing cleanup removes documents.
 - A new state-directory environment option: the existing spool-directory option selects the needed path.
-- A new public history-only loader mode: the existing driver name scopes the small pinned correction.
+- A new public history-only loader mode and driver-name restriction: the bundled loader has no concrete native-resumption consumer to protect.
+- A legacy-record fixture and generic-driver restoration regression: the canceled-job smoke covers absent messages, and no existing fixture relies on native nonterminal restoration.
 - A separate startup/history test harness: the image smoke already starts the real app, submits representative jobs, captures output and reads web rows.
 
 Kept items, each with its contract and the failure of the smaller alternative:
@@ -78,7 +80,7 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Container-replacement scenario: the same requirement; a library-only roundtrip misses both the missing mount and duplicate-queue startup.
 - Interrupted-history sentence: new `Interrupted jobs return as history`; retaining a pending/processing state can reactivate saved input.
 - Unfinished-input scenario: the same requirement; omitting surviving inputs would miss the loader's active-job branch.
-- Saved-history identity sentence: new `Saved history belongs to the configured printer`, completing the already chosen fail-on-conflict policy; silent deletion loses the requested history and retargeting needs the new API excluded by the proposal.
+- Saved-history identity sentence: new `Saved history belongs to the configured printer`, completing the already chosen fail-on-conflict policy; silent deletion loses the requested history and retargeting adds an unnecessary API to this design.
 - Printer-change scenario: the same requirement; ordinary same-printer recreation never exercises the pairing helper's address change.
 - Existing recovery prohibition sentence: carried unchanged under MODIFIED as required by the delta format; removal would weaken the existing no-replay contract.
 - Existing idempotent-cleanup sentence: carried unchanged; removal would weaken abort cleanup.
@@ -105,13 +107,12 @@ Kept items, each with its contract and the failure of the smaller alternative:
 - Existing reason-bit field: saved metadata and existing failure-reason fallback; omitting it leaves old/message-free records unexplained.
 - Optional message field: saved metadata and existing `Failed jobs show their reason`; current PAPPL serialization demonstrably omits the displayed text.
 - Existing option escaping and literal message restoration: exact saved message; raw token splitting or interpreting a diagnostic as a format string changes its text.
-- Driver-scoped nonterminal normalization: interrupted-history requirement and existing no-replay rule; native restoration can reactivate surviving documents.
+- Nonterminal normalization: interrupted-history requirement and existing no-replay rule; native restoration can reactivate surviving documents, while a driver-name restriction has no concrete consumer to protect.
 - Interruption message/completion metadata: interrupted-history requirement; changing state alone does not explain why the job stopped.
 - Input-file cleanup with existing disabled completed-document retention: existing PAPPL behavior and proposal boundary against archival; mounting the spool otherwise leaves interrupted payloads behind.
 - Existing retention limit: bounded history requirement; a second limit would add an unnecessary setting and differing eviction policy.
-- Message/legacy-record state fixture: saved metadata; container-only coverage does not directly exercise absent/escaped message fields.
+- Escaped-message state fixture: saved metadata; the image's decoder-generated text cannot exercise deliberately chosen quotes and percent signs, while its canceled-job case already covers absent messages.
 - Processing/stopped restoration fixtures with present inputs: interrupted-history requirement; the native loader treats STOPPED differently from earlier states.
-- Generic-driver regression in the same fixture: bounded dependency correction; unconditional normalization would change unrelated fixture scheduling.
 - Real-app image replacement smoke: persistent history scenario; isolated save/load cannot expose the app's create-before-load defect.
 - One-queue and advancing-ID assertions in that smoke: existing stable queue and native identity; history text alone can pass despite duplicate queues or ID reuse.
 - IPP/web message assertions in that smoke: existing visible-history clauses plus durability; file contents alone do not establish that users see the restored explanation.

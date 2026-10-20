@@ -2,12 +2,12 @@
 
 ## 1. Preserve diagnostic metadata safely
 
-- [ ] 1.1 Extend the existing pinned PAPPL job-history patch to save/load optional message text and restore unfinished `brother_ptouch` jobs as aborted completed history, removing their input files before scheduling; verify message roundtrips (including quotes and percent signs), legacy records without messages, and saved processing/stopped jobs with surviving inputs in focused state fixtures based on `tests/test_pappl_finishings.c`, with no active jobs or device output.
-- [ ] 1.2 Update `patches/README.md` for the correction's scope and removal criteria; verify strict patch application in both existing Docker build paths and that generic PAPPL fixture drivers retain their existing behavior.
+- [ ] 1.1 Extend the existing pinned PAPPL job-history patch to save/load optional message text and restore all unfinished jobs as aborted completed history, removing their input files before scheduling; verify message roundtrips (including quotes and percent signs) and saved processing/stopped jobs with surviving inputs in focused state fixtures based on `tests/test_pappl_finishings.c`, with no active jobs or device output.
+- [ ] 1.2 Update `patches/README.md` for the correction's scope and removal criteria; verify strict patch application in both existing Docker build paths.
 
 ## 2. Load before creating the queue
 
-- [ ] 2.1 Honor the existing spool-directory option in `src/main.c`, register the persistent save callback and load once before creating a missing configured queue; verify the actual app with a selected directory starts with exactly one matching queue, retains saved history, rejects restored identity conflicts without changing saved state, and starts with the replacement configuration after selecting fresh storage.
+- [ ] 2.1 Honor the existing spool-directory option in `src/main.c`, register the persistent save callback and load once before creating a missing configured queue; verify the actual app with a selected directory starts with exactly one matching queue, retains saved history, rejects restored identity conflicts without changing the saved state file or its job history (interrupted payloads are cleaned during load), and starts with the replacement configuration after selecting fresh storage.
 - [ ] 2.2 Extend `scripts/smoke-image.py` to replace a container against the same mounted directory after its successful, malformed-PNG, and canceled jobs; verify IDs, saved fields, exact failure explanations through IPP and web history, advancing new-job IDs, zero replay, and existing disabled completed-document retention. Update README history/recovery text to match these outcomes and the explicit directory option.
 
 ## 3. Retain state outside the container
