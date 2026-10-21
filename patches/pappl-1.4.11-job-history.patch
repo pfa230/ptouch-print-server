@@ -71,3 +71,93 @@
  
    if (show_cancel)
    {
+--- a/pappl/system-loadsave.c
++++ b/pappl/system-loadsave.c
+@@ -323,7 +323,6 @@
+ 	{
+ 	  // Read printer job
+ 	  pappl_job_t	*job;		// Current Job
+-	  struct stat	jobbuf;		// Job file buffer
+ 	  const char	*job_name,	// Job name
+ 			*job_id,	// Job ID
+ 			*job_username,	// Job username
+@@ -332,12 +331,13 @@
+ 
+ 	  num_options = cupsParseOptions(value, /*end*/NULL, 0, &options);
+ 
+-	  if ((job_id = cupsGetOption("id", num_options, options)) == NULL || strtol(job_id, NULL, 10) <= 0 || (job_name = cupsGetOption("name", num_options, options)) == NULL || (job_username = cupsGetOption("username", num_options, options)) == NULL || (job_format = cupsGetOption("format", num_options, options)) == NULL)
++	  if ((job_id = cupsGetOption("id", num_options, options)) == NULL || strtol(job_id, NULL, 10) <= 0 || (job_name = cupsGetOption("name", num_options, options)) == NULL || (job_username = cupsGetOption("username", num_options, options)) == NULL)
+ 	  {
+ 	    papplLog(system, PAPPL_LOGLEVEL_ERROR, "Bad Job definition on line %d of '%s'.", linenum, filename);
+ 	    break;
+ 	  }
+ 
++	  job_format = cupsGetOption("format", num_options, options);
+ 	  if ((job = _papplJobCreate(printer, (int)strtol(job_id, NULL, 10), job_username, job_format, job_name, NULL)) == NULL)
+ 	  {
+ 	    papplLog(system, PAPPL_LOGLEVEL_ERROR, "Error creating job %s for printer %s", job_name, printer->name);
+@@ -368,40 +368,23 @@
+ 	  if ((job_value = cupsGetOption("imcompleted", num_options, options)) != NULL)
+ 	    job->impcompleted = (int)strtol(job_value, NULL, 10);
+ 
+-	  // Add the job to printer completed jobs array...
+-	  if (job->state < IPP_JSTATE_STOPPED)
++	  if ((job_value = cupsGetOption("message", num_options, options)) != NULL)
++	    papplJobSetMessage(job, "%s", job_value);
++
++	  // Saved input is history only: never schedule unfinished work after restart.
++	  if (job->state < IPP_JSTATE_CANCELED)
+ 	  {
+-	    // Load the file attributes from the spool directory...
+-	    int		attr_fd;	// Attribute file descriptor
+-	    char	job_attr_filename[256];
+-					// Attribute filename
+-
+-	    if ((attr_fd = papplJobOpenFile(job, job_attr_filename, sizeof(job_attr_filename), system->directory, "ipp", "r")) < 0)
+-	    {
+-	      if (errno != ENOENT)
+-		papplLog(system, PAPPL_LOGLEVEL_ERROR, "Unable to open file for job attributes: '%s'.", job_attr_filename);
+-	      continue;
+-	    }
+-
+-	    ippReadFile(attr_fd, job->attrs);
+-	    close(attr_fd);
+-
+-	    if (!job->filename || stat(job->filename, &jobbuf))
+-	    {
+-	      // If file removed, then set job state to aborted...
+-	      job->state = IPP_JSTATE_ABORTED;
+-	    }
+-	    else
+-	    {
+-	      // Add the job to printer active jobs array...
+-	      cupsArrayAdd(printer->active_jobs, job);
+-	    }
++	    char job_attr_filename[1024]; // Attribute filename
++
++	    papplJobSetMessage(job, "Interrupted by server restart; explicitly resubmit the job.%s%s",
++	                       job_value ? " Previous diagnostic: " : "", job_value ? job_value : "");
++	    job->state = IPP_JSTATE_ABORTED;
++	    job->state_reasons |= PAPPL_JREASON_ABORTED_BY_SYSTEM;
++	    job->completed = time(NULL);
++	    _papplJobRemoveFile(job);
++	    papplJobOpenFile(job, job_attr_filename, sizeof(job_attr_filename), system->directory, "ipp", "x");
+ 	  }
+-	  else
+-	  {
+-	    // Add job to printer completed jobs...
+-	    cupsArrayAdd(printer->completed_jobs, job);
+-	  }
++	  cupsArrayAdd(printer->completed_jobs, job);
+ 	}
+ 	else
+ 	  papplLog(system, PAPPL_LOGLEVEL_WARN, "Unknown printer directive '%s' on line %d of '%s'.", line, linenum, filename);
+@@ -613,6 +596,8 @@
+       num_options = cupsAddOption("username", job->username, num_options, &options);
+       num_options = cupsAddOption("format", job->format, num_options, &options);
+ 
++      if (job->message)
++        num_options = cupsAddOption("message", job->message, num_options, &options);
+       if (job->filename)
+         num_options = cupsAddOption("filename", job->filename, num_options, &options);
+       if (job->is_canceled)

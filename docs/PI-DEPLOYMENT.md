@@ -13,7 +13,7 @@ This guide runs the server on a wall-powered Raspberry Pi Zero 2 W and reaches a
 
 What the card does:
 
-- **Power loss:** `overlayroot` keeps `/` in RAM over a read-only root, and `/boot/firmware` is read-only. Everything that must persist lives on the ext4 partition labelled `ptdata`, mounted at `/data`: Docker (`/data/docker`), Bluetooth pairing (`/var/lib/bluetooth`), the journal (`/var/log/journal`) and the server configuration (`/data/ptouch/ptouch.env`). Pairing, updates and configuration changes therefore never need the overlay disabled.
+- **Power loss:** `overlayroot` keeps `/` in RAM over a read-only root, and `/boot/firmware` is read-only. Everything that must persist lives on the ext4 partition labelled `ptdata`, mounted at `/data`: Docker (`/data/docker`), Bluetooth pairing (`/var/lib/bluetooth`), the journal (`/var/log/journal`), the server configuration (`/data/ptouch/ptouch.env`), and application history (`/data/ptouch/state`, mounted at `/var/lib/ptouch`). Pairing, updates and configuration changes therefore never need the overlay disabled.
 - **Service:** `ptouch.service` runs the container as described below, reading `/data/ptouch/ptouch.env`. It skips itself until `PTOUCH_BT_ADDRESS` is set.
 - **Logs:** the container logs to the persistent journal, synced every 10 seconds. `ptouch-logs` shows the server log and `ptouch-logs jobs` only its `[Job N]` lines; both accept `journalctl` options such as `-f` or `-b -1`.
 - **Updates:** `sudo ptouch-update` pulls `:edge` and restarts; `sudo ptouch-update sha-<commit>` pins or rolls back.
@@ -80,8 +80,10 @@ The container advertises the printer under the Pi's hostname.
 ## 4. Run the server
 
 ```sh
+sudo mkdir -p /data/ptouch/state
 sudo docker run -d --name ptouch --restart unless-stopped \
   --network host \
+  --mount type=bind,src=/data/ptouch/state,dst=/var/lib/ptouch \
   --ulimit nofile=65536:65536 \
   -e PTOUCH_MODEL=PT-P710BT \
   -e PTOUCH_BT_ADDRESS=XX:XX:XX:XX:XX:XX \
@@ -94,7 +96,7 @@ No USB mount, device rule, or added capability is needed. `PTOUCH_IDLE_POLL_SECO
 Check it:
 
 ```sh
-sudo docker logs ptouch | grep 'Created printer'   # ptouch-bt://Brother/PT-P710BT/<address>
+sudo docker logs ptouch | grep -E 'Created printer|Restored printer'   # ptouch-bt://Brother/PT-P710BT/<address>
 sudo docker exec ptouch ptouch-app status -d ptouch
 ```
 
@@ -107,6 +109,56 @@ The queue is reachable at `ipp://<pi-hostname>.local:8000/ipp/print/ptouch`.
 - **Leaving range mid-print leaves the label uncertain.** The queue blocks new output. Power-cycle the printer, run `sudo docker restart ptouch`, then resubmit the job.
 - **A held job keeps the connection open.** Plain `lp` and AirPrint jobs are not held. If a client holds a job (`job-hold-until`), the connection stays open even after that job is canceled; `sudo docker restart ptouch` releases it.
 
+## Persistent job history on an installed card
+
+The image uses `/var/lib/ptouch` via PAPPL's existing `spool-directory` option. New cards bind `/data/ptouch/state` there. An image update alone cannot add this mount to an already installed systemd unit. Journal logs (`ptouch-logs`) are separate diagnostic text, not application history or printer run state.
+
+Before restarting, inspect any held label or uncertain print, finish it or follow the power-cycle recovery above. On an existing read-only-root card:
+
+```sh
+sudo systemctl stop ptouch
+sudo mkdir -p /data/ptouch/state
+sudo mount -o remount,rw /media/root-ro
+sudoedit /media/root-ro/etc/systemd/system/ptouch.service
+```
+
+Add `ExecStartPre=/usr/bin/mkdir -p /data/ptouch/state` before the existing `ExecStartPre` line. In the continued `ExecStart` command, add this line before `--log-driver`, retaining its trailing backslash:
+
+```ini
+  --mount type=bind,src=/data/ptouch/state,dst=/var/lib/ptouch \
+```
+
+Keep the existing host network, environment file, journald options and nofile limit. Then install the edited unit into the current overlay as well, so `ptouch-update` uses it immediately and the underlying copy survives reboot:
+
+```sh
+sudo cp /media/root-ro/etc/systemd/system/ptouch.service /etc/systemd/system/ptouch.service
+sudo mount -o remount,ro /media/root-ro
+sudo systemctl daemon-reload
+sudo ptouch-update
+sudo docker inspect ptouch --format '{{json .Mounts}}'
+ptouch-logs --since '5 minutes ago'
+```
+
+Confirm the bind source is `/data/ptouch/state` and destination is `/var/lib/ptouch`. The web history should survive service restart and image replacement. A real Pi reboot persistence check is a separate deployment check; container/socket tests do not establish it.
+
+Saved IDs, job fields and failure explanations survive within PAPPL's existing history limit, up to its last successful state save. Abrupt power loss may lose newer changes. Jobs saved unfinished return as aborted history with an explicit resubmission message; their inputs are removed, and completed documents are not archived. History does not restore a held/uncertain printer run or authorize replay. Previously deleted containers have no supported backfill from journals; only an actually available PAPPL state file can supply prior history.
+
+## Changing printers
+
+A different model or transport URI (including a new Bluetooth address) conflicts with saved printer identity. Startup reports the conflict and preserves the state file and its job history. Interrupted input payloads may already have been cleaned during load. For an intentional replacement, inspect/recover any unfinished physical output, then archive the old history and use fresh storage:
+
+```sh
+sudo systemctl stop ptouch
+sudo mv /data/ptouch/state "/data/ptouch/state-$(date +%Y%m%d-%H%M%S)"
+sudo mkdir -p /data/ptouch/state
+sudo ptouch-pair XX:XX:XX:XX:XX:XX
+ptouch-logs --since '5 minutes ago'
+```
+
+`ptouch-pair` bonds/trusts the printer, updates the persistent configuration and requests a service restart. Its success does not establish printing readiness; check the logs for startup and connection results. When configuring without the helper, edit `/data/ptouch/ptouch.env` after creating fresh storage, then run `sudo systemctl start ptouch`. These `/data` changes need no root remount. Keep the archive until you choose to remove it. A manual Docker deployment uses the same stop/archive/create/reconfigure/start order for its mounted directory.
+
 ## Roll back
+
+Image rollback: use `sudo ptouch-update sha-<commit>` on a card or the older image tag in the manual command. Keep the state directory and bind mount. An older image may ignore this history path and is not guaranteed to retain or display the saved history. Preserve the directory for returning to the newer image; journal storage remains independent.
 
 Stop the Pi server: `sudo docker rm -f ptouch` for a manual install, or `sudo systemctl stop ptouch` on a prebuilt card, whose service otherwise recreates the container (to keep it off across reboots, disable it through `/media/root-ro` as above). Re-enable Avahi if the Pi needs it (`sudo systemctl enable --now avahi-daemon`), and return to the USB deployment.

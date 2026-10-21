@@ -64,9 +64,11 @@ write_files:
       [Service]
       EnvironmentFile=/data/ptouch/ptouch.env
       ExecCondition=/bin/sh -c 'test -n "$PTOUCH_BT_ADDRESS" || { echo "PTOUCH_BT_ADDRESS is empty: run sudo ptouch-pair"; exit 1; }'
+      ExecStartPre=/usr/bin/mkdir -p /data/ptouch/state
       ExecStartPre=-/usr/bin/docker rm -f ptouch
       ExecStart=/usr/bin/docker run --rm --name ptouch --network host \
         --ulimit nofile=65536:65536 --env-file /data/ptouch/ptouch.env \
+        --mount type=bind,src=/data/ptouch/state,dst=/var/lib/ptouch \
         --log-driver journald --log-opt tag=ptouch ${PTOUCH_IMAGE}
       ExecStop=/usr/bin/docker stop -t 20 ptouch
       Restart=always
@@ -116,8 +118,11 @@ write_files:
       fi
       bluetoothctl trust "$addr"
       sed -i "s|^PTOUCH_BT_ADDRESS=.*|PTOUCH_BT_ADDRESS=$addr|" /data/ptouch/ptouch.env
+      echo "Printer $addr is bonded, trusted, and configured."
+      echo "If changing printers, archive the old state directory and create fresh storage first;"
+      echo "see docs/PI-DEPLOYMENT.md, Changing printers."
       systemctl restart ptouch
-      echo "ptouch now prints to $addr"
+      echo "Server restart requested; check ptouch-logs for startup conflicts and readiness."
   - path: /usr/local/bin/ptouch-logs
     permissions: "0755"
     content: |

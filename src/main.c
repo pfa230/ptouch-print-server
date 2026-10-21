@@ -1,3 +1,6 @@
+#include <errno.h>
+#include <limits.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -69,11 +72,22 @@ static bool discovery_cb(const char *info, const char *uri, const char *id, void
 
 static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *data)
 {
-    (void)num_options; (void)options; (void)data;
+    (void)data;
+    const char *directory = cupsGetOption("spool-directory", num_options, options);
+    /* PAPPL retains callback data until the server exits. */
+    static char statefile[PATH_MAX];
+    int length = directory
+        ? snprintf(statefile, sizeof statefile, "%s/ptouch-app.state", directory)
+        : snprintf(statefile, sizeof statefile, "%s/ptouch-app%u.state",
+                   papplGetTempDir(), (unsigned)getuid());
+    if (length < 0 || (size_t)length >= sizeof statefile) {
+        fprintf(stderr, "State directory path is too long\n");
+        return NULL;
+    }
     pappl_system_t *sys = papplSystemCreate(
         PAPPL_SOPTIONS_MULTI_QUEUE | PAPPL_SOPTIONS_WEB_INTERFACE,
         "ptouch", 8000, "_print,_universal",
-        NULL, "-", PAPPL_LOGLEVEL_INFO, NULL, false);
+        directory, "-", PAPPL_LOGLEVEL_INFO, NULL, false);
     if (!sys)
         return NULL;
 
@@ -93,40 +107,43 @@ static pappl_system_t *system_cb(int num_options, cups_option_t *options, void *
     pt_usb_format_uri(model, uri, sizeof uri);
     pt_usb_format_id(model, id, sizeof id);
 
-    /* Test override: create the printer on an explicit URI (e.g. a socket sink)
-     * instead of enumerating ptouch://. Lets the geometry gate run against
-     * socket://127.0.0.1:9100 with no USB printer involved (no physical printing). */
+    /* Resolve configuration before comparing it with the restored identity. */
     const char *override_uri = getenv("PTOUCH_DEVICE_URI");
-    if (override_uri && *override_uri) {
-        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
-                                                id, override_uri);
-        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-                 "%s printer for %s (PTOUCH_DEVICE_URI override)",
-                 p ? "Created" : "FAILED to create", override_uri);
-        return sys;
-    }
-
-    /* Bluetooth has no enumeration: the address alone selects the printer, and
-     * reachability is learned by connecting. USB is never touched. */
-    if (bt_address()) {
+    const char *device_uri = uri;
+    if (override_uri && *override_uri)
+        device_uri = override_uri;
+    else if (bt_address())
         pt_bt_format_uri(bt_address(), uri, sizeof uri);
-        pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch", id, uri);
-        papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-                 "%s printer for %s", p ? "Created" : "FAILED to create", uri);
-        return sys;
-    }
 
-    /* Always create the configured supported model's stable queue. Discovery
-     * supplies diagnostics, never a first-device fallback or a different model. */
-    papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, discovery_cb, NULL, discovery_error_cb, sys);
-    ssize_t matches = pt_usb_count(model->vid, model->pid);
-    pappl_printer_t *p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch",
-                                           id, uri);
-    if (p && matches != 1)
-        papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
-    papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR,
-             "%s printer for %s (%d matching USB devices)",
-             p ? "Created" : "FAILED to create", uri, (int)matches);
+    papplSystemSetSaveCallback(sys, (pappl_save_cb_t)papplSystemSaveState, statefile);
+    if (!papplSystemLoadState(sys, statefile) && errno != ENOENT) {
+        papplSystemDelete(sys);
+        return NULL;
+    }
+    pappl_printer_t *p = papplSystemFindPrinter(sys, "/ipp/print/ptouch", 0, NULL);
+    bool restored = p != NULL;
+    if (p && (strcmp(papplPrinterGetDeviceID(p), id) ||
+              strcmp(papplPrinterGetDeviceURI(p), device_uri))) {
+        papplLog(sys, PAPPL_LOGLEVEL_ERROR,
+                 "Saved printer (%s, %s) conflicts with configured printer (%s, %s). "
+                 "Stop the server, move the old state directory aside, and select a fresh "
+                 "spool-directory before changing printers.",
+                 papplPrinterGetDeviceID(p), papplPrinterGetDeviceURI(p), id, device_uri);
+        papplSystemDelete(sys);
+        return NULL;
+    }
+    if (!p)
+        p = papplPrinterCreate(sys, 0, "ptouch", "brother_ptouch", id, device_uri);
+    /* Discovery diagnoses the configured USB model, never selects another one. */
+    if ((!override_uri || !*override_uri) && !bt_address()) {
+        papplDeviceList(PAPPL_DEVTYPE_CUSTOM_LOCAL, discovery_cb, NULL, discovery_error_cb, sys);
+        ssize_t matches = pt_usb_count(model->vid, model->pid);
+        if (p && matches != 1)
+            papplPrinterSetReasons(p, PAPPL_PREASON_OFFLINE, PAPPL_PREASON_NONE);
+        papplLog(sys, PAPPL_LOGLEVEL_INFO, "%d matching USB devices", (int)matches);
+    }
+    papplLog(sys, p ? PAPPL_LOGLEVEL_INFO : PAPPL_LOGLEVEL_ERROR, "%s printer for %s",
+             restored ? "Restored" : p ? "Created" : "FAILED to create", device_uri);
     return sys;
 }
 

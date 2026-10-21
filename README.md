@@ -329,18 +329,29 @@ starts a system dbus and Avahi, then runs `ptouch-app server` on port 8000. The
 application writes normal startup, job, and error diagnostics directly to stderr,
 visible through `docker logs`; no debug logfile or separate tail process is
 needed. dbus and Avahi startup failures stop the entrypoint and remain visible.
-The container has no persistent state, so no volume is needed.
+Mount persistent storage at `/var/lib/ptouch`, as in the examples below. The
+entrypoint selects it with `ptouch-app server -o spool-directory=/var/lib/ptouch`.
+For a native launch, use `-o spool-directory=/your/persistent/directory`; the
+application creates that directory if its parent exists and keeps
+`ptouch-app.state` there. Without this option the spool and per-user state file
+use temporary storage and have no deployment durability guarantee.
 
 If a job reports uncertain output, check the job list on the web interface's
-landing page, `http://<host>:8000/`, before restarting. It shows the 20 most recent
+landing page, `http://<host>:8000/`. It shows the 20 most recent
 jobs with each failed job's reason, such as "Write to printer failed; output
 uncertain"; `docker logs ptouch` holds further detail. Power-cycle the printer,
 then run `docker restart ptouch` and check
 `docker exec ptouch ptouch-app status -d ptouch`. Explicitly resubmit the desired
 failed job after recovery. A clean status or USB replug alone does not clear
 uncertainty; server restart alone does not clear the printer's buffered raster.
-In-memory job history and an unfinished tape run are not promised to survive
-restart, and the server does not automatically replay ambiguous output. A
+With persistent storage, saved job IDs, names, owners, timestamps, page counts,
+states, reasons and failure messages survive restart and container replacement,
+within PAPPL's existing retained-job limit. Unfinished saved jobs return as
+aborted history requiring explicit resubmission; their inputs are removed.
+Completed documents are not retained. Durability covers the last successful
+state save, so abrupt power loss can lose newer changes. Deleted history cannot
+be reconstructed from journal logs. Printer run state remains process-local;
+history never establishes readiness or automatically replays output. A
 P710BT page rejected before output, such as end-margin ink or an incomplete
 first page, sends no page output and preserves a healthy preceding run, so it
 needs no power-cycle or restart. Recovery is still required when earlier output
@@ -360,6 +371,7 @@ services:
         hard: 65536                      # advertises nothing at all
     volumes:
       - /dev/bus/usb:/dev/bus/usb        # BIND MOUNT, not `devices:` - see below
+      - ./ptouch-state:/var/lib/ptouch  # saved job history outside the container
     device_cgroup_rules:
       - 'c 189:* rwm'                    # allow libusb to claim USB char devices
     networks:
@@ -367,6 +379,13 @@ services:
         aliases:
           - ptouch.local                 # PAPPL accepts *.local as a Host header
 ```
+
+If the configured model or transport URI changes, startup fails and preserves
+the old state file and its job history. Stop the container, move `ptouch-state`
+aside as an archive, create a fresh directory at the same path, reconfigure the
+printer, and start again. Keep the archive until you choose to delete it;
+interrupted input files may already have been cleaned during loading. See the
+[Pi migration and printer-change procedure](docs/PI-DEPLOYMENT.md#changing-printers).
 
 **Use a bind mount for `/dev/bus/usb`, not compose `devices:`.** `devices:` maps
 only the device nodes that exist when the container starts. Power-cycling the
